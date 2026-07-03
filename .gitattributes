@@ -1,0 +1,15 @@
+# LF is the standard: all text files are normalized and checked out as LF,
+# on every platform. Windows-specific files (.bat/.sln) are the only exception.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.sln text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.ktx2 binary
+*.glb binary
+*.bin binary
+*.spv binary
+*.tracy binary

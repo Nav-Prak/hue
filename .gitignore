@@ -1,0 +1,23 @@
+# Build outputs
+/build/
+/out/
+/install/
+
+# IDE / tooling
+/.vs/
+/.idea/
+/.cache/
+*.user
+CMakeUserPresets.json
+
+# Tracy captures, fuzz artifacts
+*.tracy
+crash-*
+/tools/fuzz/corpus-work/
+
+# OS noise
+Thumbs.db
+.DS_Store
+
+#Internal files
+/internal/

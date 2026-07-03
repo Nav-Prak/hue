@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows-msvc:
+    name: Windows MSVC (${{ matrix.job }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: release
+            preset: windows-msvc
+            build_preset: windows-release
+            test_preset: windows-release
+          - job: debug
+            preset: windows-msvc
+            build_preset: windows-debug
+            test_preset: ""
+          - job: sanitized
+            preset: windows-msvc-asan
+            build_preset: windows-asan
+            test_preset: windows-asan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.build_preset }}
+      - name: Test
+        if: matrix.test_preset != ''
+        run: ctest --preset ${{ matrix.test_preset }}
+
+  linux-clang:
+    name: Linux Clang (${{ matrix.job }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: release
+            preset: linux-clang
+            build_preset: linux-release
+            test_preset: linux-release
+          - job: debug
+            preset: linux-clang-debug
+            build_preset: linux-debug
+            test_preset: ""
+          - job: sanitized
+            preset: linux-clang-sanitized
+            build_preset: linux-sanitized
+            test_preset: linux-sanitized
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.build_preset }}
+      - name: Test
+        if: matrix.test_preset != ''
+        run: ctest --preset ${{ matrix.test_preset }}

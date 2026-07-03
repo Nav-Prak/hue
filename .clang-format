@@ -1,0 +1,17 @@
+# c:\ProjectHue\.clang-format
+BasedOnStyle: LLVM
+Standard: c++20
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+PointerAlignment: Left
+DerivePointerAlignment: false
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+BreakBeforeBraces: Attach
+NamespaceIndentation: None
+FixNamespaceComments: true
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive

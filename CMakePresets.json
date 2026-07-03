@@ -1,0 +1,80 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "windows-msvc",
+            "displayName": "Windows MSVC (Visual Studio, multi-config)",
+            "binaryDir": "${sourceDir}/build/windows-msvc",
+            "architecture": { "value": "x64", "strategy": "set" },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+        },
+        {
+            "name": "windows-msvc-asan",
+            "displayName": "Windows MSVC + AddressSanitizer",
+            "inherits": "windows-msvc",
+            "binaryDir": "${sourceDir}/build/windows-msvc-asan",
+            "cacheVariables": { "HUE_SANITIZE": "ON" }
+        },
+        {
+            "name": "linux-clang",
+            "displayName": "Linux Clang (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/linux-clang",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Release"
+            },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+        },
+        {
+            "name": "linux-clang-debug",
+            "inherits": "linux-clang",
+            "binaryDir": "${sourceDir}/build/linux-clang-debug",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+        },
+        {
+            "name": "linux-clang-sanitized",
+            "displayName": "Linux Clang + ASan/UBSan",
+            "inherits": "linux-clang",
+            "binaryDir": "${sourceDir}/build/linux-clang-sanitized",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "HUE_SANITIZE": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "windows-release", "configurePreset": "windows-msvc", "configuration": "Release" },
+        { "name": "windows-debug", "configurePreset": "windows-msvc", "configuration": "Debug" },
+        { "name": "windows-asan", "configurePreset": "windows-msvc-asan", "configuration": "Debug" },
+        { "name": "linux-release", "configurePreset": "linux-clang" },
+        { "name": "linux-debug", "configurePreset": "linux-clang-debug" },
+        { "name": "linux-sanitized", "configurePreset": "linux-clang-sanitized" }
+    ],
+    "testPresets": [
+        {
+            "name": "windows-release",
+            "configurePreset": "windows-msvc",
+            "configuration": "Release",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "windows-asan",
+            "configurePreset": "windows-msvc-asan",
+            "configuration": "Debug",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "linux-release",
+            "configurePreset": "linux-clang",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "linux-sanitized",
+            "configurePreset": "linux-clang-sanitized",
+            "output": { "outputOnFailure": true }
+        }
+    ]
+}
