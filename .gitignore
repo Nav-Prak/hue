@@ -3,6 +3,9 @@
 /out/
 /install/
 
+# Week 0 animation feasibility spike (throwaway, private per plan)
+/spike/
+
 # IDE / tooling
 /.vs/
 /.idea/

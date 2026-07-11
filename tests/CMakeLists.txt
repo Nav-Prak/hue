@@ -10,7 +10,9 @@ FetchContent_MakeAvailable(doctest)
 
 add_executable(hue_tests
     main.cpp
+    core/test_log.cpp
     core/test_result.cpp
+    core/test_time.cpp
 )
 # The no-exceptions flags propagate from hue_core, so run doctest in its
 # supported no-exceptions mode (failed asserts terminate instead of throwing).

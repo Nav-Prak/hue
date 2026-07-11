@@ -23,6 +23,9 @@ if(MSVC)
         /we4244 /we4245 /we4267 /we4305   # narrowing & sign conversions
         /we4456 /we4457 /we4458 /we4459   # shadowing
     )
+    # Portable CRT calls (fopen, strncpy) are used deliberately; the _s
+    # variants don't exist on the Linux/Clang CI leg.
+    target_compile_definitions(hue_options INTERFACE _CRT_SECURE_NO_WARNINGS)
     # Hardened release flags (Security Engineering Directives)
     target_compile_options(hue_options INTERFACE $<$<CONFIG:Release>:/guard:cf /GS>)
     target_link_options(hue_options INTERFACE $<$<CONFIG:Release>:/guard:cf /DYNAMICBASE>)
