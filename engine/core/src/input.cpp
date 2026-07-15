@@ -2,6 +2,7 @@
 
 #include "hue/core/input.h"
 
+#include "hue/core/trace.h"
 #include "hue/core/window.h"
 
 #include <GLFW/glfw3.h>
@@ -22,6 +23,7 @@ static_assert(pad::kAxisLeftX == GLFW_GAMEPAD_AXIS_LEFT_X &&
               pad::kAxisRightTrigger == GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER);
 
 void Input::update(const Window& window) {
+    HUE_PROFILE_ZONE("Input::update");
     GLFWwindow* w = window.handle();
 
     std::memcpy(m_prev_keys, m_keys, sizeof(m_keys));

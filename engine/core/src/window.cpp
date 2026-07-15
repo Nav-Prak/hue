@@ -3,6 +3,7 @@
 #include "hue/core/window.h"
 
 #include "hue/core/log.h"
+#include "hue/core/trace.h"
 
 #include <GLFW/glfw3.h>
 
@@ -54,6 +55,7 @@ bool Window::should_close() const {
 }
 
 void Window::poll_events() {
+    HUE_PROFILE_ZONE("Window::poll_events");
     glfwPollEvents();
 }
 

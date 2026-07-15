@@ -2,6 +2,8 @@
 
 #include "hue/core/log.h"
 
+#include "hue/core/trace.h"
+
 #include <chrono>
 #include <csignal>
 #include <cstdarg>
@@ -58,6 +60,7 @@ void init(Level console_min) {
 }
 
 void write(Level level, const char* fmt, ...) {
+    HUE_PROFILE_ZONE("log::write");
     State& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
 

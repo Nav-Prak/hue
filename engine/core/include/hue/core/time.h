@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "hue/core/trace.h"
+
 #include <chrono>
 
 namespace hue {
@@ -23,6 +25,7 @@ public:
     // Feed one frame's wall-clock duration; returns how many fixed sim steps
     // to run this frame.
     int advance(double frame_seconds) {
+        HUE_PROFILE_ZONE("FixedTimestep::advance");
         if (frame_seconds < 0.0) frame_seconds = 0.0;
         if (frame_seconds > kMaxFrameSeconds) frame_seconds = kMaxFrameSeconds;
         m_accumulator += frame_seconds;
@@ -52,6 +55,7 @@ public:
 
     // Seconds since the previous tick() (or construction).
     double tick() {
+        HUE_PROFILE_ZONE("FrameClock::tick");
         const auto now = std::chrono::steady_clock::now();
         const double dt = std::chrono::duration<double>(now - m_last).count();
         m_last = now;

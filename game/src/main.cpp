@@ -7,6 +7,7 @@
 #include "hue/core/input.h"
 #include "hue/core/log.h"
 #include "hue/core/time.h"
+#include "hue/core/trace.h"
 #include "hue/core/version.h"
 #include "hue/core/window.h"
 
@@ -72,6 +73,7 @@ int main(int argc, char** argv) {
     long long frames = 0;
 
     while (!window.value().should_close()) {
+        HUE_PROFILE_ZONE("game::frame");
         window.value().poll_events();
         input.update(window.value());
 
@@ -92,6 +94,7 @@ int main(int argc, char** argv) {
         // rendering with timestep.alpha() interpolation lands in Week 4
 
         ++frames;
+        HUE_PROFILE_FRAME();
         if (max_frames >= 0 && frames >= max_frames) break;
     }
 
