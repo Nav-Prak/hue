@@ -10,8 +10,13 @@ FetchContent_MakeAvailable(doctest)
 
 add_executable(hue_tests
     main.cpp
+    core/test_array.cpp
+    core/test_checked_math.cpp
+    core/test_hash_map.cpp
     core/test_log.cpp
+    core/test_memory.cpp
     core/test_result.cpp
+    core/test_string_id.cpp
     core/test_time.cpp
 )
 # The no-exceptions flags propagate from hue_core, so run doctest in its

@@ -33,4 +33,11 @@ if(NOT hue_smoke_result EQUAL 0)
         "stderr:\n${hue_smoke_stderr}")
 endif()
 
+string(FIND "${hue_smoke_stderr}" "allocation overlay (shutdown)" hue_overlay_position)
+if(hue_overlay_position EQUAL -1)
+    message(FATAL_ERROR
+        "Hue window smoke test did not emit the allocation overlay summary\n"
+        "stderr:\n${hue_smoke_stderr}")
+endif()
+
 message(STATUS "Hue window smoke test passed\n${hue_smoke_stderr}")

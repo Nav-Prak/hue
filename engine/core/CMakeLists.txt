@@ -1,14 +1,20 @@
 # c:\ProjectHue\engine\core\CMakeLists.txt
 add_library(hue_core STATIC
+    include/hue/core/array.h
+    include/hue/core/checked_math.h
+    include/hue/core/hash_map.h
     include/hue/core/input.h
     include/hue/core/log.h
+    include/hue/core/memory.h
     include/hue/core/result.h
+    include/hue/core/string_id.h
     include/hue/core/time.h
     include/hue/core/trace.h
     include/hue/core/version.h
     include/hue/core/window.h
     src/input.cpp
     src/log.cpp
+    src/memory.cpp
     src/version.cpp
     src/window.cpp
 )
