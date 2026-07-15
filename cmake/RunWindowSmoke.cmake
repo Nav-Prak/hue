@@ -33,11 +33,15 @@ if(NOT hue_smoke_result EQUAL 0)
         "stderr:\n${hue_smoke_stderr}")
 endif()
 
-string(FIND "${hue_smoke_stderr}" "allocation overlay (shutdown)" hue_overlay_position)
+# xvfb-run merges the client's stderr into stdout on some distros, so the
+# overlay marker may land in either captured stream.
+set(hue_smoke_output "${hue_smoke_stdout}${hue_smoke_stderr}")
+string(FIND "${hue_smoke_output}" "allocation overlay (shutdown)" hue_overlay_position)
 if(hue_overlay_position EQUAL -1)
     message(FATAL_ERROR
         "Hue window smoke test did not emit the allocation overlay summary\n"
+        "stdout:\n${hue_smoke_stdout}\n"
         "stderr:\n${hue_smoke_stderr}")
 endif()
 
-message(STATUS "Hue window smoke test passed\n${hue_smoke_stderr}")
+message(STATUS "Hue window smoke test passed\n${hue_smoke_output}")
