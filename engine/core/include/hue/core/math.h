@@ -48,6 +48,18 @@ inline constexpr float kEpsilon = 1e-6f;
     return std::fabs(a - b) <= tolerance;
 }
 
+// Fast reciprocal square root: rsqrtss (~22-bit) plus one Newton-Raphson
+// step brings relative error to ~2e-7, at roughly half the latency of
+// sqrtss + divss. Normalization goes through this instead of dividing.
+[[nodiscard]] inline float inv_sqrt(float x) noexcept {
+#if HUE_SIMD_SSE
+    const float estimate = _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(x)));
+    return estimate * (1.5f - 0.5f * x * estimate * estimate);
+#else
+    return 1.0f / std::sqrt(x);
+#endif
+}
+
 // ---------------------------------------------------------------- Vec2/Vec3
 
 struct Vec2 {
@@ -72,7 +84,13 @@ struct Vec3 {
     friend constexpr Vec3 operator*(Vec3 a, Vec3 b) noexcept { // component-wise
         return {a.x * b.x, a.y * b.y, a.z * b.z};
     }
-    friend constexpr Vec3 operator/(Vec3 a, float s) noexcept { return {a.x / s, a.y / s, a.z / s}; }
+    // One divide + three multiplies instead of three divides. The single
+    // rounding difference is far below kEpsilon and divss is ~4x the cost
+    // of mulss with no pipelining between the three lanes.
+    friend constexpr Vec3 operator/(Vec3 a, float s) noexcept {
+        const float inv = 1.0f / s;
+        return {a.x * inv, a.y * inv, a.z * inv};
+    }
 };
 
 [[nodiscard]] constexpr float dot(Vec3 a, Vec3 b) noexcept {
@@ -88,12 +106,13 @@ struct Vec3 {
     return std::sqrt(length_squared(v));
 }
 // Zero-length input returns the zero vector (no exceptions, no NaN).
+// One rsqrt + three multiplies; the old sqrt + divide chain serialized.
 [[nodiscard]] inline Vec3 normalize(Vec3 v) noexcept {
     const float len_sq = length_squared(v);
     if (len_sq <= kEpsilon * kEpsilon) {
         return {};
     }
-    return v / std::sqrt(len_sq);
+    return v * inv_sqrt(len_sq);
 }
 [[nodiscard]] constexpr Vec3 lerp(Vec3 a, Vec3 b, float t) noexcept {
     return a + (b - a) * t;
@@ -111,7 +130,9 @@ struct Vec3 {
 
 // ---------------------------------------------------------------- Vec4
 
-struct Vec4 {
+// 16-byte aligned so SSE ops use aligned load/store (loadu on a split cache
+// line costs an extra cycle or more per access; aligned never splits).
+struct alignas(16) Vec4 {
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
@@ -120,7 +141,7 @@ struct Vec4 {
     friend Vec4 operator+(Vec4 a, Vec4 b) noexcept {
 #if HUE_SIMD_SSE
         Vec4 out;
-        _mm_storeu_ps(&out.x, _mm_add_ps(_mm_loadu_ps(&a.x), _mm_loadu_ps(&b.x)));
+        _mm_store_ps(&out.x, _mm_add_ps(_mm_load_ps(&a.x), _mm_load_ps(&b.x)));
         return out;
 #else
         return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w};
@@ -129,7 +150,7 @@ struct Vec4 {
     friend Vec4 operator-(Vec4 a, Vec4 b) noexcept {
 #if HUE_SIMD_SSE
         Vec4 out;
-        _mm_storeu_ps(&out.x, _mm_sub_ps(_mm_loadu_ps(&a.x), _mm_loadu_ps(&b.x)));
+        _mm_store_ps(&out.x, _mm_sub_ps(_mm_load_ps(&a.x), _mm_load_ps(&b.x)));
         return out;
 #else
         return {a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w};
@@ -138,7 +159,7 @@ struct Vec4 {
     friend Vec4 operator*(Vec4 a, float s) noexcept {
 #if HUE_SIMD_SSE
         Vec4 out;
-        _mm_storeu_ps(&out.x, _mm_mul_ps(_mm_loadu_ps(&a.x), _mm_set1_ps(s)));
+        _mm_store_ps(&out.x, _mm_mul_ps(_mm_load_ps(&a.x), _mm_set1_ps(s)));
         return out;
 #else
         return {a.x * s, a.y * s, a.z * s, a.w * s};
@@ -147,9 +168,16 @@ struct Vec4 {
     friend Vec4 operator*(float s, Vec4 a) noexcept { return a * s; }
 };
 
+// mul + movshdup/movehl horizontal reduction instead of dpps: the dpps
+// microcode is high-latency on Intel and cracks into 3-4 uops on AMD,
+// while this sequence is three cheap single-uop instructions.
 [[nodiscard]] inline float dot(Vec4 a, Vec4 b) noexcept {
 #if HUE_SIMD_SSE
-    return _mm_cvtss_f32(_mm_dp_ps(_mm_loadu_ps(&a.x), _mm_loadu_ps(&b.x), 0xF1));
+    const __m128 products = _mm_mul_ps(_mm_load_ps(&a.x), _mm_load_ps(&b.x));
+    __m128 shuffled = _mm_movehdup_ps(products);        // y y w w
+    __m128 sums = _mm_add_ps(products, shuffled);       // x+y . z+w .
+    shuffled = _mm_movehl_ps(shuffled, sums);           // z+w . . .
+    return _mm_cvtss_f32(_mm_add_ss(sums, shuffled));   // x+y+z+w
 #else
     return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
 #endif
@@ -158,7 +186,8 @@ struct Vec4 {
 // ---------------------------------------------------------------- Quat
 
 // Rotation quaternion (x, y, z, w), w is the scalar part. Matches glTF layout.
-struct Quat {
+// Aligned like Vec4 so bone palettes can be processed with aligned SSE.
+struct alignas(16) Quat {
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
@@ -189,11 +218,12 @@ struct Quat {
     return {-q.x, -q.y, -q.z, q.w};
 }
 [[nodiscard]] inline Quat normalize(Quat q) noexcept {
-    const float len = std::sqrt(dot(q, q));
-    if (len <= kEpsilon) {
+    const float len_sq = dot(q, q);
+    if (len_sq <= kEpsilon * kEpsilon) {
         return {};
     }
-    return {q.x / len, q.y / len, q.z / len, q.w / len};
+    const float inv = inv_sqrt(len_sq);
+    return {q.x * inv, q.y * inv, q.z * inv, q.w * inv};
 }
 
 // Rotate a vector: v' = v + 2w(u x v) + 2(u x (u x v)) with u = (x,y,z).
@@ -228,10 +258,25 @@ struct Quat {
     });
 }
 
+// Normalized lerp: no acos/sin, so ~3x cheaper than slerp. Not constant
+// angular velocity, but for the small arcs typical of per-frame animation
+// blending the difference is invisible. Use slerp for large-arc cases
+// (cinematic cameras, big snap corrections).
+[[nodiscard]] inline Quat nlerp(Quat a, Quat b, float t) noexcept {
+    const float sign = dot(a, b) < 0.0f ? -1.0f : 1.0f;
+    return normalize(Quat{
+        a.x + (sign * b.x - a.x) * t,
+        a.y + (sign * b.y - a.y) * t,
+        a.z + (sign * b.z - a.z) * t,
+        a.w + (sign * b.w - a.w) * t,
+    });
+}
+
 // ---------------------------------------------------------------- Mat4
 
 // Column-major 4x4: m[column * 4 + row], matching glTF and GLSL std140.
-struct Mat4 {
+// 16-byte aligned so each column is an aligned SSE lane.
+struct alignas(16) Mat4 {
     float m[16] = {
         1.0f, 0.0f, 0.0f, 0.0f, //
         0.0f, 1.0f, 0.0f, 0.0f, //
@@ -323,18 +368,21 @@ struct Mat4 {
     friend Mat4 operator*(const Mat4& a, const Mat4& b) noexcept {
         Mat4 out;
 #if HUE_SIMD_SSE
-        const __m128 a0 = _mm_loadu_ps(a.m + 0);
-        const __m128 a1 = _mm_loadu_ps(a.m + 4);
-        const __m128 a2 = _mm_loadu_ps(a.m + 8);
-        const __m128 a3 = _mm_loadu_ps(a.m + 12);
+        const __m128 a0 = _mm_load_ps(a.m + 0);
+        const __m128 a1 = _mm_load_ps(a.m + 4);
+        const __m128 a2 = _mm_load_ps(a.m + 8);
+        const __m128 a3 = _mm_load_ps(a.m + 12);
         for (int column = 0; column < 4; ++column) {
+            // Per-element broadcasts measure faster than load + 4 shuffles
+            // here: the shuffles all contend for the same execution port and
+            // sit on the critical path when multiplies are chained.
             const __m128 b0 = _mm_set1_ps(b.m[column * 4 + 0]);
             const __m128 b1 = _mm_set1_ps(b.m[column * 4 + 1]);
             const __m128 b2 = _mm_set1_ps(b.m[column * 4 + 2]);
             const __m128 b3 = _mm_set1_ps(b.m[column * 4 + 3]);
             const __m128 result = _mm_add_ps(_mm_add_ps(_mm_mul_ps(a0, b0), _mm_mul_ps(a1, b1)),
                                              _mm_add_ps(_mm_mul_ps(a2, b2), _mm_mul_ps(a3, b3)));
-            _mm_storeu_ps(out.m + column * 4, result);
+            _mm_store_ps(out.m + column * 4, result);
         }
 #else
         for (int column = 0; column < 4; ++column) {
@@ -352,13 +400,17 @@ struct Mat4 {
 
     friend Vec4 operator*(const Mat4& a, Vec4 v) noexcept {
 #if HUE_SIMD_SSE
+        const __m128 vec = _mm_load_ps(&v.x);
         const __m128 result = _mm_add_ps(
-            _mm_add_ps(_mm_mul_ps(_mm_loadu_ps(a.m + 0), _mm_set1_ps(v.x)),
-                       _mm_mul_ps(_mm_loadu_ps(a.m + 4), _mm_set1_ps(v.y))),
-            _mm_add_ps(_mm_mul_ps(_mm_loadu_ps(a.m + 8), _mm_set1_ps(v.z)),
-                       _mm_mul_ps(_mm_loadu_ps(a.m + 12), _mm_set1_ps(v.w))));
+            _mm_add_ps(
+                _mm_mul_ps(_mm_load_ps(a.m + 0), _mm_shuffle_ps(vec, vec, _MM_SHUFFLE(0, 0, 0, 0))),
+                _mm_mul_ps(_mm_load_ps(a.m + 4), _mm_shuffle_ps(vec, vec, _MM_SHUFFLE(1, 1, 1, 1)))),
+            _mm_add_ps(
+                _mm_mul_ps(_mm_load_ps(a.m + 8), _mm_shuffle_ps(vec, vec, _MM_SHUFFLE(2, 2, 2, 2))),
+                _mm_mul_ps(_mm_load_ps(a.m + 12),
+                           _mm_shuffle_ps(vec, vec, _MM_SHUFFLE(3, 3, 3, 3)))));
         Vec4 out;
-        _mm_storeu_ps(&out.x, result);
+        _mm_store_ps(&out.x, result);
         return out;
 #else
         Vec4 out;
@@ -395,10 +447,47 @@ struct Mat4 {
     // General 4x4 inverse (cofactor expansion). Returns identity for a
     // singular matrix; engine matrices (TRS, view, proj) are never singular.
     [[nodiscard]] Mat4 inverted() const noexcept;
+
+    // Inverse of a rigid transform (rotation + translation, NO scale):
+    // M^-1 = [R^T | -R^T t]. ~12 multiplies vs ~200 flops for the general
+    // cofactor inverse. This is the hot path for view matrices and bones.
+    [[nodiscard]] Mat4 inverted_rigid() const noexcept {
+        Mat4 out;
+        out.m[0] = m[0];
+        out.m[1] = m[4];
+        out.m[2] = m[8];
+        out.m[4] = m[1];
+        out.m[5] = m[5];
+        out.m[6] = m[9];
+        out.m[8] = m[2];
+        out.m[9] = m[6];
+        out.m[10] = m[10];
+        out.m[12] = -(out.m[0] * m[12] + out.m[4] * m[13] + out.m[8] * m[14]);
+        out.m[13] = -(out.m[1] * m[12] + out.m[5] * m[13] + out.m[9] * m[14]);
+        out.m[14] = -(out.m[2] * m[12] + out.m[6] * m[13] + out.m[10] * m[14]);
+        return out;
+    }
 };
 
+// Direct composition instead of translation(t) * rotation(r) * scaling(s):
+// the two full 4x4 multiplies cost ~128 mul + ~96 add; scaling the rotation
+// columns in place and writing the translation costs 9 multiplies. This is
+// per-bone, per-frame work in the animation pipeline.
 inline Mat4 Mat4::trs(Vec3 t, Quat r, Vec3 s) noexcept {
-    return Mat4::translation(t) * Mat4::rotation(r) * Mat4::scaling(s);
+    Mat4 out = Mat4::rotation(r);
+    out.m[0] *= s.x;
+    out.m[1] *= s.x;
+    out.m[2] *= s.x;
+    out.m[4] *= s.y;
+    out.m[5] *= s.y;
+    out.m[6] *= s.y;
+    out.m[8] *= s.z;
+    out.m[9] *= s.z;
+    out.m[10] *= s.z;
+    out.m[12] = t.x;
+    out.m[13] = t.y;
+    out.m[14] = t.z;
+    return out;
 }
 
 inline Mat4 Mat4::inverted() const noexcept {

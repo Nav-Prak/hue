@@ -10,6 +10,7 @@ FetchContent_MakeAvailable(doctest)
 
 add_executable(hue_tests
     main.cpp
+    core/bench_math.cpp
     core/test_array.cpp
     core/test_checked_math.cpp
     core/test_geometry.cpp

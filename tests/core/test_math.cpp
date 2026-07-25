@@ -144,6 +144,44 @@ TEST_CASE("math: mat4 look_at maps eye to origin and target onto -Z") {
     check_vec3(view.transform_vector({1.0f, 0.0f, 0.0f}), 1.0f, 0.0f, 0.0f);
 }
 
+TEST_CASE("math: quaternion nlerp matches slerp for small arcs") {
+    const Quat a = Quat::from_axis_angle({0.0f, 1.0f, 0.0f}, hue::radians(10.0f));
+    const Quat b = Quat::from_axis_angle({0.0f, 1.0f, 0.0f}, hue::radians(25.0f));
+    const Quat n = nlerp(a, b, 0.4f);
+    const Quat s = slerp(a, b, 0.4f);
+    const Vec3 vn = rotate(n, {1.0f, 0.0f, 0.0f});
+    const Vec3 vs = rotate(s, {1.0f, 0.0f, 0.0f});
+    CHECK(vn.x == doctest::Approx(vs.x).epsilon(1e-3f));
+    CHECK(vn.y == doctest::Approx(vs.y).epsilon(1e-3f));
+    CHECK(vn.z == doctest::Approx(vs.z).epsilon(1e-3f));
+
+    // Shortest-path handling: interpolating toward -b (same rotation) must
+    // not swing the long way around.
+    const Quat negated_b{-b.x, -b.y, -b.z, -b.w};
+    const Quat via_negated = nlerp(a, negated_b, 1.0f);
+    const Vec3 direct = rotate(b, {1.0f, 0.0f, 0.0f});
+    const Vec3 flipped = rotate(via_negated, {1.0f, 0.0f, 0.0f});
+    CHECK(flipped.x == doctest::Approx(direct.x).epsilon(1e-4f));
+    CHECK(flipped.z == doctest::Approx(direct.z).epsilon(1e-4f));
+}
+
+TEST_CASE("math: mat4 rigid inverse matches general inverse") {
+    const Quat q = Quat::from_axis_angle({0.2f, 0.9f, -0.4f}, hue::radians(52.0f));
+    const Mat4 rigid = Mat4::trs({7.0f, -3.0f, 2.5f}, q, {1.0f, 1.0f, 1.0f});
+
+    const Mat4 fast = rigid.inverted_rigid();
+    const Mat4 general = rigid.inverted();
+    for (int i = 0; i < 16; ++i) {
+        CHECK(fast.m[i] == doctest::Approx(general.m[i]).epsilon(1e-3f));
+    }
+
+    const Mat4 should_be_identity = rigid * fast;
+    const Mat4 identity = Mat4::identity();
+    for (int i = 0; i < 16; ++i) {
+        CHECK(should_be_identity.m[i] == doctest::Approx(identity.m[i]).epsilon(1e-3f));
+    }
+}
+
 TEST_CASE("math: mat4 inverse recovers identity") {
     const Quat q = Quat::from_axis_angle({0.3f, 0.7f, 0.2f}, hue::radians(37.0f));
     const Mat4 m = Mat4::trs({4.0f, -2.0f, 9.0f}, q, {2.0f, 0.5f, 3.0f});
