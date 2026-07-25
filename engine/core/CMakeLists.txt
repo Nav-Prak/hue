@@ -2,17 +2,22 @@
 add_library(hue_core STATIC
     include/hue/core/array.h
     include/hue/core/checked_math.h
+    include/hue/core/geometry.h
     include/hue/core/hash_map.h
     include/hue/core/input.h
+    include/hue/core/jobs.h
     include/hue/core/log.h
+    include/hue/core/math.h
     include/hue/core/memory.h
     include/hue/core/result.h
+    include/hue/core/spring.h
     include/hue/core/string_id.h
     include/hue/core/time.h
     include/hue/core/trace.h
     include/hue/core/version.h
     include/hue/core/window.h
     src/input.cpp
+    src/jobs.cpp
     src/log.cpp
     src/memory.cpp
     src/version.cpp
@@ -22,6 +27,13 @@ add_library(hue::core ALIAS hue_core)
 
 target_include_directories(hue_core PUBLIC include)
 target_link_libraries(hue_core PUBLIC hue::engine_flags)
+
+# SIMD baseline per plan: SSE4.2 for Vec4/Mat4 hot paths. MSVC x64 exposes
+# these intrinsics by default; Clang/GCC need the flag. PUBLIC because the
+# intrinsics live in the public math.h header.
+if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_options(hue_core PUBLIC -msse4.2)
+endif()
 target_compile_definitions(hue_core PUBLIC
     HUE_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
     HUE_VERSION_MINOR=${PROJECT_VERSION_MINOR}

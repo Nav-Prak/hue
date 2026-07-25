@@ -2,17 +2,22 @@
 //
 // Week 1 loop: window + input + fixed timestep. Week 2 adds a fixed-storage
 // allocation reporter until ImGui becomes the visual overlay in Week 13.
+// Week 3 spins up the job pool and runs a startup parallel-for benchmark.
 // --frames N exits after N frames (CI smoke test).
 
 #include "hue/core/input.h"
+#include "hue/core/jobs.h"
 #include "hue/core/log.h"
+#include "hue/core/math.h"
 #include "hue/core/memory.h"
 #include "hue/core/time.h"
 #include "hue/core/trace.h"
 #include "hue/core/version.h"
 #include "hue/core/window.h"
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -101,6 +106,52 @@ private:
     double m_elapsed_seconds = 0.0;
 };
 
+// Startup benchmark (Week 3 DoD): the same math-heavy workload run serially
+// and through parallel_for, so the log shows the real speedup and a Tracy
+// capture shows every hue_worker_N thread busy.
+constexpr std::uint32_t kBenchChunk = 4096;
+constexpr std::uint32_t kBenchChunkCount = 512;
+constexpr std::uint32_t kBenchIterations = kBenchChunk * kBenchChunkCount; // ~2M rotations
+
+struct BenchContext {
+    float partial_sums[kBenchChunkCount] = {};
+};
+
+void bench_job(void* user_data, std::uint32_t start, std::uint32_t end) {
+    auto* context = static_cast<BenchContext*>(user_data);
+    const hue::Quat spin = hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f}, hue::radians(1.0f));
+    float sum = 0.0f;
+    for (std::uint32_t i = start; i < end; ++i) {
+        hue::Vec3 v{static_cast<float>(i & 1023u) * 0.01f, 1.0f, -0.5f};
+        v = rotate(spin, v);
+        sum += v.x + v.y + v.z;
+    }
+    // Chunk starts are multiples of kBenchChunk, so this write is exclusive.
+    context->partial_sums[start / kBenchChunk] = sum;
+}
+
+void run_job_benchmark(hue::JobSystem& jobs) {
+    using Clock = std::chrono::steady_clock;
+    BenchContext context;
+
+    const auto serial_start = Clock::now();
+    for (std::uint32_t begin = 0; begin < kBenchIterations; begin += kBenchChunk) {
+        bench_job(&context, begin, begin + kBenchChunk);
+    }
+    const double serial_ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - serial_start).count();
+
+    const auto parallel_start = Clock::now();
+    jobs.parallel_for(kBenchIterations, kBenchChunk, &bench_job, &context);
+    const double parallel_ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - parallel_start).count();
+
+    const double speedup = parallel_ms > 0.0 ? serial_ms / parallel_ms : 0.0;
+    HUE_LOG_INFO("job benchmark: %u quat rotations serial %.2f ms, parallel %.2f ms "
+                 "(%.2fx on %u workers)",
+                 kBenchIterations, serial_ms, parallel_ms, speedup, jobs.worker_count());
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -127,6 +178,14 @@ int main(int argc, char** argv) {
         return 1;
     }
     HUE_LOG_INFO("window open (1280x720)");
+
+    auto jobs = hue::JobSystem::create();
+    if (!jobs) {
+        HUE_LOG_ERROR("job system init failed");
+        return 1;
+    }
+    HUE_LOG_INFO("job system: %u workers", jobs.value().worker_count());
+    run_job_benchmark(jobs.value());
 
     hue::Input input;
     hue::FrameClock clock;
