@@ -5,6 +5,7 @@
 // Week 3 spins up the job pool and runs a startup parallel-for benchmark.
 // --frames N exits after N frames (CI smoke test).
 
+#include "hue/core/debug_channel.h"
 #include "hue/core/input.h"
 #include "hue/core/jobs.h"
 #include "hue/core/log.h"
@@ -106,6 +107,36 @@ private:
     double m_elapsed_seconds = 0.0;
 };
 
+#if defined(HUE_DEBUG_CHANNEL)
+
+// Live loop state exposed through the debug channel. Single-threaded: the
+// loop writes these fields and the channel dispatches handlers on the same
+// thread inside update().
+struct GameDebugContext {
+    long long frames = 0;
+    long long sim_steps = 0;
+    double uptime_seconds = 0.0;
+    bool quit_requested = false;
+};
+
+void status_command(void* user_data, const hue::DebugCommandLine& command,
+                    hue::DebugResponse& response) {
+    (void)command;
+    const auto* context = static_cast<const GameDebugContext*>(user_data);
+    response.append_format("{\"frames\":%lld,\"sim_steps\":%lld,\"uptime_seconds\":%.3f}",
+                           context->frames, context->sim_steps, context->uptime_seconds);
+}
+
+void quit_command(void* user_data, const hue::DebugCommandLine& command,
+                  hue::DebugResponse& response) {
+    (void)command;
+    auto* context = static_cast<GameDebugContext*>(user_data);
+    context->quit_requested = true;
+    response.append("{\"quitting\":true}");
+}
+
+#endif // HUE_DEBUG_CHANNEL
+
 // Startup benchmark (Week 3 DoD): the same math-heavy workload run serially
 // and through parallel_for, so the log shows the real speedup and a Tracy
 // capture shows every hue_worker_N thread busy.
@@ -160,9 +191,19 @@ int main(int argc, char** argv) {
     HUE_LOG_INFO("%s starting", hue::engine_version_string());
 
     long long max_frames = -1; // run until closed
-    for (int i = 1; i < argc - 1; ++i) {
-        if (std::strcmp(argv[i], "--frames") == 0) {
+    bool debug_channel_requested = false;
+    std::uint32_t debug_channel_port = hue::kDebugChannelDefaultPort;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             max_frames = std::atoll(argv[i + 1]);
+        } else if (std::strcmp(argv[i], "--debug-channel") == 0) {
+            debug_channel_requested = true;
+            // Optional port argument: --debug-channel 46601
+            std::uint32_t parsed_port = 0;
+            if (i + 1 < argc && hue::parse_debug_u32(argv[i + 1], parsed_port) &&
+                parsed_port <= 65535u) {
+                debug_channel_port = parsed_port;
+            }
         }
     }
 
@@ -186,6 +227,35 @@ int main(int argc, char** argv) {
     }
     HUE_LOG_INFO("job system: %u workers", jobs.value().worker_count());
     run_job_benchmark(jobs.value());
+
+#if defined(HUE_DEBUG_CHANNEL)
+    GameDebugContext debug_context;
+    auto debug_channel = debug_channel_requested
+                             ? hue::DebugChannel::create(
+                                   static_cast<std::uint16_t>(debug_channel_port))
+                             : hue::Result<hue::DebugChannel>(hue::ErrorCode::kUnsupported);
+    if (debug_channel_requested) {
+        if (!debug_channel) {
+            HUE_LOG_ERROR("debug channel init failed");
+            return 1;
+        }
+        auto registered = debug_channel.value().register_command(
+            "status", "frames, sim steps, and uptime of the running game", &status_command,
+            &debug_context);
+        if (registered) {
+            registered = debug_channel.value().register_command(
+                "quit", "request a clean shutdown", &quit_command, &debug_context);
+        }
+        if (!registered) {
+            HUE_LOG_ERROR("debug channel command registration failed");
+            return 1;
+        }
+    }
+#else
+    if (debug_channel_requested) {
+        HUE_LOG_WARN("--debug-channel ignored: HUE_DEBUG_CHANNEL not compiled in");
+    }
+#endif
 
     hue::Input input;
     hue::FrameClock clock;
@@ -220,6 +290,20 @@ int main(int argc, char** argv) {
 
         ++frames;
         allocation_reporter.sample(frame_seconds);
+
+#if defined(HUE_DEBUG_CHANNEL)
+        if (debug_channel) {
+            debug_context.frames = frames;
+            debug_context.sim_steps = timestep.total_steps();
+            debug_context.uptime_seconds += frame_seconds;
+            debug_channel.value().update();
+            if (debug_context.quit_requested) {
+                HUE_LOG_INFO("quit requested via debug channel");
+                break;
+            }
+        }
+#endif
+
         HUE_PROFILE_FRAME();
         if (max_frames >= 0 && frames >= max_frames)
             break;

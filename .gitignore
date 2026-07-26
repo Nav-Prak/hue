@@ -10,6 +10,7 @@
 /.vs/
 /.idea/
 /.cache/
+/.cursor/
 *.user
 CMakeUserPresets.json
 
@@ -17,6 +18,10 @@ CMakeUserPresets.json
 *.tracy
 crash-*
 /tools/fuzz/corpus-work/
+
+# Python tooling
+__pycache__/
+*.pyc
 
 # OS noise
 Thumbs.db

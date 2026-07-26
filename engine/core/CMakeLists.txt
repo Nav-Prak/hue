@@ -2,6 +2,7 @@
 add_library(hue_core STATIC
     include/hue/core/array.h
     include/hue/core/checked_math.h
+    include/hue/core/debug_channel.h
     include/hue/core/geometry.h
     include/hue/core/hash_map.h
     include/hue/core/input.h
@@ -16,6 +17,7 @@ add_library(hue_core STATIC
     include/hue/core/trace.h
     include/hue/core/version.h
     include/hue/core/window.h
+    src/debug_channel.cpp
     src/input.cpp
     src/jobs.cpp
     src/log.cpp
@@ -27,6 +29,16 @@ add_library(hue::core ALIAS hue_core)
 
 target_include_directories(hue_core PUBLIC include)
 target_link_libraries(hue_core PUBLIC hue::engine_flags)
+
+# Debug command channel: registry/parser always compile (unit-tested and
+# fuzzable); the socket server only exists when this define is present, and
+# even then the game requires an explicit --debug-channel flag at runtime.
+if(HUE_DEBUG_CHANNEL)
+    target_compile_definitions(hue_core PUBLIC HUE_DEBUG_CHANNEL=1)
+    if(WIN32)
+        target_link_libraries(hue_core PRIVATE ws2_32)
+    endif()
+endif()
 
 # SIMD baseline per plan: SSE4.2 for Vec4/Mat4 hot paths. MSVC x64 exposes
 # these intrinsics by default; Clang/GCC need the flag. PUBLIC because the

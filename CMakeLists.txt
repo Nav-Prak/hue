@@ -14,6 +14,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(HUE_SANITIZE "Build with ASan (+UBSan on Clang)" OFF)
 option(HUE_TRACY_ENABLE "Enable Tracy profiler instrumentation" ON)
+option(HUE_DEBUG_CHANNEL "Compile the localhost debug command channel (runtime opt-in via --debug-channel)" ON)
 
 include(cmake/HueOptions.cmake)
 

@@ -13,6 +13,7 @@ add_executable(hue_tests
     core/bench_math.cpp
     core/test_array.cpp
     core/test_checked_math.cpp
+    core/test_debug_channel.cpp
     core/test_geometry.cpp
     core/test_hash_map.cpp
     core/test_jobs.cpp
@@ -47,3 +48,21 @@ add_test(
         -P ${PROJECT_SOURCE_DIR}/cmake/RunWindowSmoke.cmake
 )
 set_tests_properties(platform_window_smoke PROPERTIES LABELS "platform;smoke" TIMEOUT 15)
+
+# End-to-end debug channel test: Python drives a live game over TCP.
+if(HUE_DEBUG_CHANNEL)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(
+            NAME debug_channel_smoke
+            COMMAND ${CMAKE_COMMAND}
+                -DHUE_GAME=$<TARGET_FILE:hue_game>
+                -DHUE_PYTHON=${Python3_EXECUTABLE}
+                -DHUE_SMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/debug_channel_smoke.py
+                -P ${PROJECT_SOURCE_DIR}/cmake/RunDebugChannelSmoke.cmake
+        )
+        set_tests_properties(debug_channel_smoke PROPERTIES LABELS "platform;smoke" TIMEOUT 150)
+    else()
+        message(STATUS "Python3 not found: skipping debug_channel_smoke test")
+    endif()
+endif()
