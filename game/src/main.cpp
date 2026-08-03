@@ -3,6 +3,8 @@
 // Week 1 loop: window + input + fixed timestep. Week 2 adds a fixed-storage
 // allocation reporter until ImGui becomes the visual overlay in Week 13.
 // Week 3 spins up the job pool and runs a startup parallel-for benchmark.
+// Week 4 brings up the Vulkan renderer (clear + triangle); machines with no
+// Vulkan 1.3 device keep running windowed unless --require-renderer is set.
 // --frames N exits after N frames (CI smoke test).
 
 #include "hue/core/debug_channel.h"
@@ -15,6 +17,7 @@
 #include "hue/core/trace.h"
 #include "hue/core/version.h"
 #include "hue/core/window.h"
+#include "hue/render/renderer.h"
 
 #include <chrono>
 #include <cstddef>
@@ -117,6 +120,7 @@ struct GameDebugContext {
     long long sim_steps = 0;
     double uptime_seconds = 0.0;
     bool quit_requested = false;
+    hue::Renderer* renderer = nullptr; // null when running without a GPU
 };
 
 void status_command(void* user_data, const hue::DebugCommandLine& command,
@@ -133,6 +137,40 @@ void quit_command(void* user_data, const hue::DebugCommandLine& command,
     auto* context = static_cast<GameDebugContext*>(user_data);
     context->quit_requested = true;
     response.append("{\"quitting\":true}");
+}
+
+void render_status_command(void* user_data, const hue::DebugCommandLine& command,
+                           hue::DebugResponse& response) {
+    (void)command;
+    const auto* context = static_cast<const GameDebugContext*>(user_data);
+    if (context->renderer == nullptr) {
+        response.set_error("renderer not active on this machine");
+        return;
+    }
+    const hue::RendererStatus& status = context->renderer->status();
+    response.append("{\"adapter\":");
+    response.append_json_string(status.adapter);
+    response.append_format(",\"swapchain\":[%u,%u],\"frames_rendered\":%llu}",
+                           status.swapchain_width, status.swapchain_height,
+                           static_cast<unsigned long long>(status.frames_rendered));
+}
+
+// Runtime recompile hook: recompile .spv externally (build, or glslang by
+// hand), then `shader.reload` picks it up without restarting the game.
+void shader_reload_command(void* user_data, const hue::DebugCommandLine& command,
+                           hue::DebugResponse& response) {
+    (void)command;
+    auto* context = static_cast<GameDebugContext*>(user_data);
+    if (context->renderer == nullptr) {
+        response.set_error("renderer not active on this machine");
+        return;
+    }
+    const auto reloaded = context->renderer->reload_shaders();
+    if (!reloaded) {
+        response.set_error("reload failed; previous pipeline kept (see log)");
+        return;
+    }
+    response.append("{\"reloaded\":true}");
 }
 
 #endif // HUE_DEBUG_CHANNEL
@@ -191,11 +229,14 @@ int main(int argc, char** argv) {
     HUE_LOG_INFO("%s starting", hue::engine_version_string());
 
     long long max_frames = -1; // run until closed
+    bool require_renderer = false;
     bool debug_channel_requested = false;
     std::uint32_t debug_channel_port = hue::kDebugChannelDefaultPort;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             max_frames = std::atoll(argv[i + 1]);
+        } else if (std::strcmp(argv[i], "--require-renderer") == 0) {
+            require_renderer = true;
         } else if (std::strcmp(argv[i], "--debug-channel") == 0) {
             debug_channel_requested = true;
             // Optional port argument: --debug-channel 46601
@@ -220,6 +261,20 @@ int main(int argc, char** argv) {
     }
     HUE_LOG_INFO("window open (1280x720)");
 
+    hue::RendererDesc renderer_desc;
+#if !defined(NDEBUG)
+    renderer_desc.enable_validation = true; // no-op when the layer is absent
+#endif
+    auto renderer = hue::Renderer::create(window.value(), renderer_desc);
+    if (!renderer) {
+        if (require_renderer) {
+            HUE_LOG_ERROR("--require-renderer set but no usable Vulkan device");
+            return 2; // distinct exit code: CI skips instead of failing
+        }
+        HUE_LOG_WARN("no usable Vulkan device; running without rendering");
+    }
+    bool renderer_active = renderer.has_value();
+
     auto jobs = hue::JobSystem::create();
     if (!jobs) {
         HUE_LOG_ERROR("job system init failed");
@@ -230,6 +285,7 @@ int main(int argc, char** argv) {
 
 #if defined(HUE_DEBUG_CHANNEL)
     GameDebugContext debug_context;
+    debug_context.renderer = renderer_active ? &renderer.value() : nullptr;
     auto debug_channel = debug_channel_requested
                              ? hue::DebugChannel::create(
                                    static_cast<std::uint16_t>(debug_channel_port))
@@ -245,6 +301,16 @@ int main(int argc, char** argv) {
         if (registered) {
             registered = debug_channel.value().register_command(
                 "quit", "request a clean shutdown", &quit_command, &debug_context);
+        }
+        if (registered) {
+            registered = debug_channel.value().register_command(
+                "render.status", "adapter, swapchain size, frames rendered",
+                &render_status_command, &debug_context);
+        }
+        if (registered) {
+            registered = debug_channel.value().register_command(
+                "shader.reload", "reload .spv shaders and rebuild the pipeline",
+                &shader_reload_command, &debug_context);
         }
         if (!registered) {
             HUE_LOG_ERROR("debug channel command registration failed");
@@ -286,7 +352,19 @@ int main(int argc, char** argv) {
         for (int s = 0; s < steps; ++s) {
             log_input_edges(input); // stand-in for the sim tick
         }
-        // rendering with timestep.alpha() interpolation lands in Week 4
+
+        // Interpolation with timestep.alpha() starts mattering when the
+        // camera moves (Week 5); the triangle only needs a present.
+        if (renderer_active) {
+            const auto drawn = renderer.value().draw_frame();
+            if (!drawn) {
+                HUE_LOG_ERROR("draw_frame failed; rendering disabled for this run");
+                renderer_active = false;
+#if defined(HUE_DEBUG_CHANNEL)
+                debug_context.renderer = nullptr;
+#endif
+            }
+        }
 
         ++frames;
         allocation_reporter.sample(frame_seconds);

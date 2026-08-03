@@ -24,11 +24,12 @@ add_executable(hue_tests
     core/test_spring.cpp
     core/test_string_id.cpp
     core/test_time.cpp
+    render/test_spirv.cpp
 )
 # The no-exceptions flags propagate from hue_core, so run doctest in its
 # supported no-exceptions mode (failed asserts terminate instead of throwing).
 target_compile_definitions(hue_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
-target_link_libraries(hue_tests PRIVATE hue_core doctest::doctest hue::options)
+target_link_libraries(hue_tests PRIVATE hue_core hue::render doctest::doctest hue::options)
 if(MSVC)
     # VS 2026 warns on doctest 2.4.12's intentional std::tuple specialization.
     # Keep the suppression scoped to the third-party test harness consumer.
@@ -48,6 +49,20 @@ add_test(
         -P ${PROJECT_SOURCE_DIR}/cmake/RunWindowSmoke.cmake
 )
 set_tests_properties(platform_window_smoke PROPERTIES LABELS "platform;smoke" TIMEOUT 15)
+
+# Vulkan bring-up proof: renderer must initialize and present with
+# --require-renderer. Exit code 2 means "no Vulkan device here" and turns
+# the test into a skip (Windows CI runners, sanitized Linux job).
+add_test(
+    NAME renderer_smoke
+    COMMAND ${CMAKE_COMMAND}
+        -DHUE_GAME=$<TARGET_FILE:hue_game>
+        -P ${PROJECT_SOURCE_DIR}/cmake/RunRendererSmoke.cmake
+)
+set_tests_properties(renderer_smoke PROPERTIES
+    LABELS "render;smoke"
+    TIMEOUT 90
+    SKIP_REGULAR_EXPRESSION "HUE_RENDERER_UNAVAILABLE")
 
 # End-to-end debug channel test: Python drives a live game over TCP.
 if(HUE_DEBUG_CHANNEL)
