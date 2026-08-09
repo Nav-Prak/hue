@@ -80,8 +80,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # xorg-dev: hue_core pulls GLFW even though the fuzzer never opens a window.
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang xorg-dev
       - name: Configure
         run: >
           cmake --preset linux-clang-sanitized
