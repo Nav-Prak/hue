@@ -1,16 +1,18 @@
 // engine/render/src/pipeline.cpp
 //
-// SPIR-V loading + the triangle graphics pipeline (dynamic rendering, no
-// render pass objects). Shader files are untrusted at reload time, so
-// every load goes through validate_spirv_bytes before reaching the driver.
+// SPIR-V loading + graphics pipelines (dynamic rendering, no render pass
+// objects). Two pipelines: the Week 4 triangle (kept for empty frames and
+// the reload demo) and the Week 5 static-mesh pipeline with vertex input,
+// depth test, and push-constant MVP. Shader files are untrusted at reload
+// time, so every load goes through validate_spirv_bytes before the driver.
 
 #include "vk_types.h"
 
 #include "hue/core/memory.h"
 #include "hue/render/spirv.h"
 
+#include <cstddef>
 #include <cstdio>
-#include <cstring>
 
 namespace hue::render {
 
@@ -100,21 +102,58 @@ void blob_release(SpirvBlob& blob) {
     return module;
 }
 
-} // namespace
+// Shared fixed-function blocks. Both pipelines render Y-up through a
+// negative viewport, so front faces stay counter-clockwise.
+struct FixedFunction {
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
+    VkPipelineViewportStateCreateInfo viewport{};
+    VkPipelineRasterizationStateCreateInfo rasterization{};
+    VkPipelineMultisampleStateCreateInfo multisample{};
+    VkPipelineColorBlendAttachmentState blend_attachment{};
+    VkPipelineColorBlendStateCreateInfo blend{};
+    VkDynamicState dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{};
 
-Result<void> pipeline_create(PipelineState& pipeline, const ContextState& context,
-                             VkFormat color_format, const char* shader_directory) {
-    auto vertex_module = shader_module_create(context, shader_directory, "triangle.vert.spv");
+    FixedFunction() {
+        input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewport.viewportCount = 1;
+        viewport.scissorCount = 1;
+        rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterization.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterization.lineWidth = 1.0f;
+        multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        blend.attachmentCount = 1;
+        blend.pAttachments = &blend_attachment;
+        dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic.dynamicStateCount = 2;
+        dynamic.pDynamicStates = dynamic_states;
+    }
+};
+
+[[nodiscard]] Result<VkPipeline>
+graphics_pipeline_create(const ContextState& context, const char* shader_directory,
+                         const char* vert_name, const char* frag_name, VkPipelineLayout layout,
+                         VkFormat color_format, VkFormat depth_format,
+                         const VkPipelineVertexInputStateCreateInfo& vertex_input,
+                         bool depth_test) {
+    auto vertex_module = shader_module_create(context, shader_directory, vert_name);
     if (!vertex_module) {
         return vertex_module.error();
     }
-    auto fragment_module = shader_module_create(context, shader_directory, "triangle.frag.spv");
+    auto fragment_module = shader_module_create(context, shader_directory, frag_name);
     if (!fragment_module) {
         vkDestroyShaderModule(context.device, vertex_module.value(), nullptr);
         return fragment_module.error();
     }
 
-    // Cleanup that runs on every exit path below.
     struct ModuleGuard {
         VkDevice device;
         VkShaderModule vertex;
@@ -135,56 +174,19 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
     stages[1].module = guard.fragment;
     stages[1].pName = "main";
 
-    VkPipelineVertexInputStateCreateInfo vertex_input{};
-    vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    const FixedFunction fixed;
 
-    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
-    input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo viewport_state{};
-    viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewport_state.viewportCount = 1;
-    viewport_state.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rasterization{};
-    rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterization.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterization.frontFace = VK_FRONT_FACE_CLOCKWISE;
-    rasterization.lineWidth = 1.0f;
-
-    VkPipelineMultisampleStateCreateInfo multisample{};
-    multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineColorBlendAttachmentState blend_attachment{};
-    blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-
-    VkPipelineColorBlendStateCreateInfo blend{};
-    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = 1;
-    blend.pAttachments = &blend_attachment;
-
-    const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                             VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamic_state{};
-    dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic_state.dynamicStateCount = 2;
-    dynamic_state.pDynamicStates = dynamic_states;
-
-    if (pipeline.layout == VK_NULL_HANDLE) {
-        VkPipelineLayoutCreateInfo layout_info{};
-        layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        HUE_VK_TRY(vkCreatePipelineLayout(context.device, &layout_info, nullptr,
-                                          &pipeline.layout));
-    }
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+    depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth_stencil.depthTestEnable = depth_test ? VK_TRUE : VK_FALSE;
+    depth_stencil.depthWriteEnable = depth_test ? VK_TRUE : VK_FALSE;
+    depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS;
 
     VkPipelineRenderingCreateInfo rendering_info{};
     rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     rendering_info.colorAttachmentCount = 1;
     rendering_info.pColorAttachmentFormats = &color_format;
+    rendering_info.depthAttachmentFormat = depth_format;
 
     VkGraphicsPipelineCreateInfo pipeline_info{};
     pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -192,27 +194,115 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
     pipeline_info.stageCount = 2;
     pipeline_info.pStages = stages;
     pipeline_info.pVertexInputState = &vertex_input;
-    pipeline_info.pInputAssemblyState = &input_assembly;
-    pipeline_info.pViewportState = &viewport_state;
-    pipeline_info.pRasterizationState = &rasterization;
-    pipeline_info.pMultisampleState = &multisample;
-    pipeline_info.pColorBlendState = &blend;
-    pipeline_info.pDynamicState = &dynamic_state;
-    pipeline_info.layout = pipeline.layout;
+    pipeline_info.pInputAssemblyState = &fixed.input_assembly;
+    pipeline_info.pViewportState = &fixed.viewport;
+    pipeline_info.pRasterizationState = &fixed.rasterization;
+    pipeline_info.pMultisampleState = &fixed.multisample;
+    pipeline_info.pDepthStencilState = &depth_stencil;
+    pipeline_info.pColorBlendState = &fixed.blend;
+    pipeline_info.pDynamicState = &fixed.dynamic;
+    pipeline_info.layout = layout;
 
-    HUE_VK_TRY(vkCreateGraphicsPipelines(context.device, VK_NULL_HANDLE, 1, &pipeline_info,
-                                         nullptr, &pipeline.pipeline));
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    const VkResult result = vkCreateGraphicsPipelines(context.device, VK_NULL_HANDLE, 1,
+                                                      &pipeline_info, nullptr, &pipeline);
+    if (result != VK_SUCCESS) {
+        HUE_LOG_ERROR("vkCreateGraphicsPipelines failed (VkResult %d) for %s",
+                      static_cast<int>(result), vert_name);
+        return ErrorCode::kUnknown;
+    }
+    return pipeline;
+}
+
+} // namespace
+
+Result<void> pipeline_create(PipelineState& pipeline, const ContextState& context,
+                             VkFormat color_format, VkFormat depth_format,
+                             const char* shader_directory) {
+    // ---- layouts (created once, survive shader reloads)
+    if (pipeline.triangle_layout == VK_NULL_HANDLE) {
+        VkPipelineLayoutCreateInfo layout_info{};
+        layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        HUE_VK_TRY(vkCreatePipelineLayout(context.device, &layout_info, nullptr,
+                                          &pipeline.triangle_layout));
+    }
+    if (pipeline.mesh_layout == VK_NULL_HANDLE) {
+        VkPushConstantRange push_range{};
+        push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        push_range.size = sizeof(MeshPushConstants);
+
+        VkPipelineLayoutCreateInfo layout_info{};
+        layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout_info.pushConstantRangeCount = 1;
+        layout_info.pPushConstantRanges = &push_range;
+        HUE_VK_TRY(vkCreatePipelineLayout(context.device, &layout_info, nullptr,
+                                          &pipeline.mesh_layout));
+    }
+
+    // ---- triangle: no vertex input, depth test off (always on top)
+    VkPipelineVertexInputStateCreateInfo empty_input{};
+    empty_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    auto triangle = graphics_pipeline_create(context, shader_directory, "triangle.vert.spv",
+                                             "triangle.frag.spv", pipeline.triangle_layout,
+                                             color_format, depth_format, empty_input, false);
+    if (!triangle) {
+        return triangle.error();
+    }
+
+    // ---- mesh: StaticVertex input, depth tested
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(asset::StaticVertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attributes[3]{};
+    attributes[0].location = 0;
+    attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributes[0].offset = offsetof(asset::StaticVertex, position);
+    attributes[1].location = 1;
+    attributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributes[1].offset = offsetof(asset::StaticVertex, normal);
+    attributes[2].location = 2;
+    attributes[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attributes[2].offset = offsetof(asset::StaticVertex, uv);
+
+    VkPipelineVertexInputStateCreateInfo mesh_input{};
+    mesh_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    mesh_input.vertexBindingDescriptionCount = 1;
+    mesh_input.pVertexBindingDescriptions = &binding;
+    mesh_input.vertexAttributeDescriptionCount = 3;
+    mesh_input.pVertexAttributeDescriptions = attributes;
+
+    auto mesh = graphics_pipeline_create(context, shader_directory, "mesh.vert.spv",
+                                         "mesh.frag.spv", pipeline.mesh_layout, color_format,
+                                         depth_format, mesh_input, true);
+    if (!mesh) {
+        vkDestroyPipeline(context.device, triangle.value(), nullptr);
+        return mesh.error();
+    }
+
+    pipeline.triangle = triangle.value();
+    pipeline.mesh = mesh.value();
     return {};
 }
 
 void pipeline_destroy(PipelineState& pipeline, const ContextState& context) {
-    if (pipeline.pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(context.device, pipeline.pipeline, nullptr);
-        pipeline.pipeline = VK_NULL_HANDLE;
+    if (pipeline.triangle != VK_NULL_HANDLE) {
+        vkDestroyPipeline(context.device, pipeline.triangle, nullptr);
+        pipeline.triangle = VK_NULL_HANDLE;
     }
-    if (pipeline.layout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(context.device, pipeline.layout, nullptr);
-        pipeline.layout = VK_NULL_HANDLE;
+    if (pipeline.mesh != VK_NULL_HANDLE) {
+        vkDestroyPipeline(context.device, pipeline.mesh, nullptr);
+        pipeline.mesh = VK_NULL_HANDLE;
+    }
+    if (pipeline.triangle_layout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(context.device, pipeline.triangle_layout, nullptr);
+        pipeline.triangle_layout = VK_NULL_HANDLE;
+    }
+    if (pipeline.mesh_layout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(context.device, pipeline.mesh_layout, nullptr);
+        pipeline.mesh_layout = VK_NULL_HANDLE;
     }
 }
 

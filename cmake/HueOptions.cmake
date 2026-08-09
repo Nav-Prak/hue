@@ -63,6 +63,13 @@ else()
         target_link_options(hue_options INTERFACE -fsanitize=address,undefined)
     endif()
 
+    # Fuzz builds instrument every engine library for coverage feedback so
+    # libFuzzer can actually steer into the parsers; only the harness
+    # targets link the fuzzer driver itself.
+    if(HUE_FUZZ AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(hue_options INTERFACE -fsanitize=fuzzer-no-link)
+    endif()
+
     target_compile_options(hue_engine_flags INTERFACE -fno-exceptions -fno-rtti)
 endif()
 

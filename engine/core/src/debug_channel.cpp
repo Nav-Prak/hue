@@ -442,11 +442,13 @@ Result<DebugChannel> DebugChannel::create(std::uint16_t port) {
         return fail("socket() failed");
     }
 
-#if !defined(_WIN32)
-    int reuse = 1;
-    setsockopt(state->listen_socket, SOL_SOCKET, SO_REUSEADDR,
-               reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-#endif
+    // SO_REUSEADDR lets a quick CI re-run reuse a port still in TIME_WAIT.
+    // On Windows this is also required for some rapid restart scenarios.
+    {
+        const int reuse = 1;
+        setsockopt(state->listen_socket, SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+    }
 
     sockaddr_in address{};
     address.sin_family = AF_INET;

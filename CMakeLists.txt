@@ -15,11 +15,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(HUE_SANITIZE "Build with ASan (+UBSan on Clang)" OFF)
 option(HUE_TRACY_ENABLE "Enable Tracy profiler instrumentation" ON)
 option(HUE_DEBUG_CHANNEL "Compile the localhost debug command channel (runtime opt-in via --debug-channel)" ON)
+option(HUE_FUZZ "Build libFuzzer harnesses (Clang only)" OFF)
 
 include(cmake/HueOptions.cmake)
 
 add_subdirectory(engine)
 add_subdirectory(game)
+
+if(HUE_FUZZ)
+    add_subdirectory(tools/fuzz)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)

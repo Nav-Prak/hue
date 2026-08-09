@@ -61,7 +61,9 @@ struct Renderer::State {
     GLFWwindow* window = nullptr;
     ContextState context;
     SwapchainState swapchain;
+    DepthState depth;
     PipelineState pipeline;
+    MeshRegistry meshes;
 
     VkCommandPool command_pool = VK_NULL_HANDLE;
     VkCommandBuffer command_buffers[kFramesInFlight] = {};
@@ -105,7 +107,9 @@ void state_destroy(Renderer::State& state) {
         vkDeviceWaitIdle(state.context.device);
     }
     destroy_sync_and_pool(state);
+    mesh_registry_destroy(state.meshes, state.context);
     pipeline_destroy(state.pipeline, state.context);
+    depth_destroy(state.depth, state.context);
     swapchain_destroy(state.swapchain, state.context);
     context_destroy(state.context);
 }
@@ -148,9 +152,14 @@ void state_destroy(Renderer::State& state) {
 [[nodiscard]] Result<void> recreate_swapchain(Renderer::State& state) {
     vkDeviceWaitIdle(state.context.device);
     swapchain_destroy(state.swapchain, state.context);
+    depth_destroy(state.depth, state.context);
     const auto created = swapchain_create(state.swapchain, state.context, state.window);
     if (!created) {
         return created.error();
+    }
+    const auto depth = depth_create(state.depth, state.context, state.swapchain.extent);
+    if (!depth) {
+        return depth.error();
     }
     state.swapchain_dirty = false;
     state.status.swapchain_width = state.swapchain.extent.width;
@@ -159,7 +168,8 @@ void state_destroy(Renderer::State& state) {
 }
 
 [[nodiscard]] Result<void> record_frame(Renderer::State& state, VkCommandBuffer cmd,
-                                        std::uint32_t image_index) {
+                                        std::uint32_t image_index, const Camera& camera,
+                                        const MeshDraw* draws, std::uint32_t draw_count) {
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -178,10 +188,27 @@ void state_destroy(Renderer::State& state) {
     to_color.subresourceRange.levelCount = 1;
     to_color.subresourceRange.layerCount = 1;
 
+    // Depth: UNDEFINED -> DEPTH_ATTACHMENT (cleared each frame, so the
+    // previous contents are never needed).
+    VkImageMemoryBarrier2 to_depth{};
+    to_depth.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    to_depth.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+    to_depth.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    to_depth.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    to_depth.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_depth.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    to_depth.image = state.depth.image;
+    to_depth.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    to_depth.subresourceRange.levelCount = 1;
+    to_depth.subresourceRange.layerCount = 1;
+
+    VkImageMemoryBarrier2 begin_barriers[] = {to_color, to_depth};
     VkDependencyInfo to_color_dep{};
     to_color_dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    to_color_dep.imageMemoryBarrierCount = 1;
-    to_color_dep.pImageMemoryBarriers = &to_color;
+    to_color_dep.imageMemoryBarrierCount = 2;
+    to_color_dep.pImageMemoryBarriers = begin_barriers;
     vkCmdPipelineBarrier2(cmd, &to_color_dep);
 
     VkRenderingAttachmentInfo color_attachment{};
@@ -192,18 +219,30 @@ void state_destroy(Renderer::State& state) {
     color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     color_attachment.clearValue.color = {{0.055f, 0.06f, 0.09f, 1.0f}}; // hue night blue
 
+    VkRenderingAttachmentInfo depth_attachment{};
+    depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth_attachment.imageView = state.depth.view;
+    depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth_attachment.clearValue.depthStencil = {1.0f, 0};
+
     VkRenderingInfo rendering_info{};
     rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     rendering_info.renderArea.extent = state.swapchain.extent;
     rendering_info.layerCount = 1;
     rendering_info.colorAttachmentCount = 1;
     rendering_info.pColorAttachments = &color_attachment;
+    rendering_info.pDepthAttachment = &depth_attachment;
 
     vkCmdBeginRendering(cmd, &rendering_info);
 
+    // Negative viewport height flips Vulkan's Y-down clip space back to the
+    // engine's Y-up convention; front faces stay counter-clockwise.
     VkViewport viewport{};
+    viewport.y = static_cast<float>(state.swapchain.extent.height);
     viewport.width = static_cast<float>(state.swapchain.extent.width);
-    viewport.height = static_cast<float>(state.swapchain.extent.height);
+    viewport.height = -static_cast<float>(state.swapchain.extent.height);
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(cmd, 0, 1, &viewport);
 
@@ -211,8 +250,50 @@ void state_destroy(Renderer::State& state) {
     scissor.extent = state.swapchain.extent;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline.pipeline);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    std::uint32_t drawn = 0;
+    std::uint32_t culled = 0;
+    if (draw_count == 0) {
+        // Bare renderer (renderer_smoke, pre-scene startup): the Week 4
+        // triangle still proves the pipeline end to end.
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline.triangle);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    } else {
+        const Mat4 view_projection = camera.view_projection();
+        const Frustum frustum = Frustum::from_view_projection(view_projection);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline.mesh);
+        for (std::uint32_t d = 0; d < draw_count; ++d) {
+            const GpuMesh* mesh = mesh_registry_resolve(state.meshes, draws[d].mesh);
+            if (mesh == nullptr) {
+                continue; // stale handle; upload path already logged
+            }
+            if (!frustum.intersects(mesh->bounds.transformed(draws[d].transform))) {
+                ++culled;
+                continue;
+            }
+
+            const VkDeviceSize zero_offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertices.buffer, &zero_offset);
+            vkCmdBindIndexBuffer(cmd, mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+            for (std::size_t i = 0; i < mesh->instances.size(); ++i) {
+                const asset::MeshInstance& instance = mesh->instances[i];
+                const asset::MeshPrimitive& primitive =
+                    mesh->primitives[instance.primitive_index];
+
+                MeshPushConstants push;
+                push.model = draws[d].transform * instance.transform;
+                push.mvp = view_projection * push.model;
+                vkCmdPushConstants(cmd, state.pipeline.mesh_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(push), &push);
+                vkCmdDrawIndexed(cmd, primitive.index_count, 1, primitive.first_index,
+                                 primitive.vertex_offset, 0);
+            }
+            ++drawn;
+        }
+    }
+    state.status.last_draws = drawn;
+    state.status.last_culled = culled;
 
     vkCmdEndRendering(cmd);
 
@@ -267,8 +348,13 @@ Result<Renderer> Renderer::create(Window& window, const RendererDesc& desc) {
     if (!swapchain) {
         return fail(swapchain.error());
     }
-    const auto pipeline = pipeline_create(state->pipeline, state->context,
-                                          state->swapchain.format, state->shader_directory);
+    const auto depth = depth_create(state->depth, state->context, state->swapchain.extent);
+    if (!depth) {
+        return fail(depth.error());
+    }
+    const auto pipeline =
+        pipeline_create(state->pipeline, state->context, state->swapchain.format,
+                        state->depth.format, state->shader_directory);
     if (!pipeline) {
         return fail(pipeline.error());
     }
@@ -303,7 +389,17 @@ Renderer::~Renderer() {
     }
 }
 
+Result<MeshHandle> Renderer::upload_static_mesh(const asset::StaticMeshData& mesh) {
+    HUE_PROFILE_ZONE("Renderer::upload_static_mesh");
+    return mesh_registry_upload(m_state->meshes, m_state->context, mesh);
+}
+
 Result<void> Renderer::draw_frame() {
+    return draw_frame(Camera{}, nullptr, 0);
+}
+
+Result<void> Renderer::draw_frame(const Camera& camera, const MeshDraw* draws,
+                                  std::uint32_t draw_count) {
     HUE_PROFILE_ZONE("Renderer::draw_frame");
     State& state = *m_state;
 
@@ -344,7 +440,7 @@ Result<void> Renderer::draw_frame() {
 
     VkCommandBuffer cmd = state.command_buffers[frame];
     HUE_VK_TRY(vkResetCommandBuffer(cmd, 0));
-    const auto recorded = record_frame(state, cmd, image_index);
+    const auto recorded = record_frame(state, cmd, image_index, camera, draws, draw_count);
     if (!recorded) {
         return recorded.error();
     }
@@ -401,7 +497,7 @@ Result<void> Renderer::reload_shaders() {
     // Build the replacement first; only touch the live pipeline on success.
     PipelineState fresh;
     const auto created = pipeline_create(fresh, state.context, state.swapchain.format,
-                                         state.shader_directory);
+                                         state.depth.format, state.shader_directory);
     if (!created) {
         pipeline_destroy(fresh, state.context);
         HUE_LOG_WARN("shader reload failed; previous pipeline stays active");

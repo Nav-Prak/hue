@@ -12,8 +12,16 @@ import subprocess
 import sys
 import time
 
-PORT = 46655  # non-default so a developer's live session is never hit
 CONNECT_TIMEOUT_S = 20.0
+
+
+def free_port():
+    # Ephemeral bind avoids hard-coded ports that Windows Hyper-V / excluded
+    # ranges sometimes forbid on developer machines (and collisions with a
+    # live --debug-channel session).
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 def fail(proc, message):
@@ -25,13 +33,13 @@ def fail(proc, message):
     sys.exit(1)
 
 
-def connect_with_retry(proc):
+def connect_with_retry(proc, port):
     deadline = time.monotonic() + CONNECT_TIMEOUT_S
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             fail(proc, f"game exited early with code {proc.returncode}")
         try:
-            return socket.create_connection(("127.0.0.1", PORT), timeout=2.0)
+            return socket.create_connection(("127.0.0.1", port), timeout=2.0)
         except OSError:
             time.sleep(0.25)
     fail(proc, "could not connect to the debug channel")
@@ -51,24 +59,25 @@ def send_command(sock, command):
 
 def main():
     game = sys.argv[1]
+    port = free_port()
     # No --frames cap: with no renderer the loop spins at thousands of fps
     # and any cap is gone before we can connect. Lifetime is controlled by
     # the quit command; every failure path kills the process.
     proc = subprocess.Popen(
-        [game, "--debug-channel", str(PORT)],
+        [game, "--debug-channel", str(port)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     try:
-        run_checks(proc)
+        run_checks(proc, port)
     except SystemExit:
         raise
     except Exception as exc:  # any unexpected error must not leak the game process
         fail(proc, f"unexpected error: {exc!r}")
 
 
-def run_checks(proc):
-    sock = connect_with_retry(proc)
+def run_checks(proc, port):
+    sock = connect_with_retry(proc, port)
 
     try:
         reply = send_command(sock, "version")
@@ -95,7 +104,8 @@ def run_checks(proc):
         reply = send_command(sock, "help")
         assert reply["ok"], reply
         names = {c["name"] for c in reply["data"]["commands"]}
-        assert {"help", "version", "status", "quit", "log.recent", "mem.snapshot"} <= names, names
+        assert {"help", "version", "status", "quit", "log.recent", "mem.snapshot",
+                "render.status", "shader.reload"} <= names, names
 
         reply = send_command(sock, "no.such.command")
         assert not reply["ok"], reply

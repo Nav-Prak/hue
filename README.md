@@ -39,4 +39,4 @@ ctest --preset windows-asan
 /docs          # public timeline, devlog drafts, threat-model.md
 ```
 
-See [docs/timeline.md](docs/timeline.md) for the week-by-week development timeline.
+See [docs/timeline.md](docs/timeline.md) for the week-by-week development timeline and [docs/threat-model.md](docs/threat-model.md) for the living threat model.

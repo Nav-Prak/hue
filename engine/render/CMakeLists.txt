@@ -81,10 +81,15 @@ endif()
 # ------------------------------------------------------------------ hue_render
 
 add_library(hue_render STATIC
+    include/hue/render/camera.h
+    include/hue/render/mesh.h
     include/hue/render/renderer.h
     include/hue/render/spirv.h
     src/vk_types.h
+    src/buffer.cpp
     src/context.cpp
+    src/depth.cpp
+    src/mesh.cpp
     src/pipeline.cpp
     src/renderer.cpp
     src/spirv.cpp
@@ -95,7 +100,7 @@ add_library(hue::render ALIAS hue_render)
 
 target_include_directories(hue_render PUBLIC include)
 target_link_libraries(hue_render
-    PUBLIC hue::core hue::engine_flags
+    PUBLIC hue::core hue::asset hue::engine_flags
     PRIVATE volk_headers GPUOpen::VulkanMemoryAllocator glfw
 )
 

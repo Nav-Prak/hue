@@ -19,6 +19,8 @@ namespace key {
 inline constexpr int kSpace = 32;
 inline constexpr int kA = 65;
 inline constexpr int kD = 68;
+inline constexpr int kE = 69;
+inline constexpr int kQ = 81;
 inline constexpr int kS = 83;
 inline constexpr int kW = 87;
 inline constexpr int kEscape = 256;

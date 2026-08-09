@@ -72,3 +72,36 @@ jobs:
       - name: Test
         if: matrix.test_preset != ''
         run: ctest --preset ${{ matrix.test_preset }}
+
+  # First fuzz harness (Week 5): throw arbitrary bytes at load_gltf under
+  # ASan/UBSan for a short timed run. Seeds live in tools/fuzz/corpus/gltf.
+  linux-fuzz-gltf:
+    name: Linux Clang (fuzz glTF)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - name: Configure
+        run: >
+          cmake --preset linux-clang-sanitized
+          -DHUE_FUZZ=ON
+          -DHUE_TRACY_ENABLE=OFF
+      - name: Build fuzz_gltf
+        run: cmake --build --preset linux-sanitized --target fuzz_gltf
+      - name: Fuzz glTF import (60s)
+        run: >
+          mkdir -p artifacts &&
+          ./build/linux-clang-sanitized/tools/fuzz/fuzz_gltf
+          tools/fuzz/corpus/gltf
+          -max_total_time=60
+          -timeout=10
+          -rss_limit_mb=2048
+          -artifact_prefix=artifacts/
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-gltf-artifacts
+          path: artifacts/
+          if-no-files-found: ignore

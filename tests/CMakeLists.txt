@@ -25,11 +25,12 @@ add_executable(hue_tests
     core/test_string_id.cpp
     core/test_time.cpp
     render/test_spirv.cpp
+    assets/test_gltf.cpp
 )
 # The no-exceptions flags propagate from hue_core, so run doctest in its
 # supported no-exceptions mode (failed asserts terminate instead of throwing).
 target_compile_definitions(hue_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
-target_link_libraries(hue_tests PRIVATE hue_core hue::render doctest::doctest hue::options)
+target_link_libraries(hue_tests PRIVATE hue_core hue::asset hue::render doctest::doctest hue::options)
 if(MSVC)
     # VS 2026 warns on doctest 2.4.12's intentional std::tuple specialization.
     # Keep the suppression scoped to the third-party test harness consumer.

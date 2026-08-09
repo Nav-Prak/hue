@@ -5,7 +5,12 @@
 // Week 3 spins up the job pool and runs a startup parallel-for benchmark.
 // Week 4 brings up the Vulkan renderer (clear + triangle); machines with no
 // Vulkan 1.3 device keep running windowed unless --require-renderer is set.
+// Week 5 uploads static meshes (procedural scene + a cube through the
+// validated glTF path) and flies a debug camera through them.
 // --frames N exits after N frames (CI smoke test).
+
+#include "fly_camera.h"
+#include "test_meshes.h"
 
 #include "hue/core/debug_channel.h"
 #include "hue/core/input.h"
@@ -17,6 +22,7 @@
 #include "hue/core/trace.h"
 #include "hue/core/version.h"
 #include "hue/core/window.h"
+#include "hue/render/camera.h"
 #include "hue/render/renderer.h"
 
 #include <chrono>
@@ -150,9 +156,11 @@ void render_status_command(void* user_data, const hue::DebugCommandLine& command
     const hue::RendererStatus& status = context->renderer->status();
     response.append("{\"adapter\":");
     response.append_json_string(status.adapter);
-    response.append_format(",\"swapchain\":[%u,%u],\"frames_rendered\":%llu}",
+    response.append_format(",\"swapchain\":[%u,%u],\"frames_rendered\":%llu,"
+                           "\"last_draws\":%u,\"last_culled\":%u}",
                            status.swapchain_width, status.swapchain_height,
-                           static_cast<unsigned long long>(status.frames_rendered));
+                           static_cast<unsigned long long>(status.frames_rendered),
+                           status.last_draws, status.last_culled);
 }
 
 // Runtime recompile hook: recompile .spv externally (build, or glslang by
@@ -275,6 +283,44 @@ int main(int argc, char** argv) {
     }
     bool renderer_active = renderer.has_value();
 
+    // Week 5 test content: procedural ground scene + a cube that proves the
+    // validated glTF import path in the live loop. Failures degrade to an
+    // emptier scene rather than aborting the run.
+    hue::MeshDraw draws[2];
+    std::uint32_t draw_count = 0;
+    if (renderer_active) {
+        auto ground = build_ground_scene();
+        if (ground) {
+            const auto uploaded = renderer.value().upload_static_mesh(ground.value());
+            if (uploaded) {
+                draws[draw_count].mesh = uploaded.value();
+                draws[draw_count].transform = hue::Mat4::identity();
+                ++draw_count;
+            }
+        }
+        auto gltf_cube = build_gltf_cube();
+        if (gltf_cube) {
+            const auto uploaded = renderer.value().upload_static_mesh(gltf_cube.value());
+            if (uploaded) {
+                draws[draw_count].mesh = uploaded.value();
+                draws[draw_count].transform =
+                    hue::Mat4::trs({0.0f, 3.75f, 0.0f},
+                                   hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
+                                                              hue::radians(30.0f)),
+                                   {1.5f, 1.5f, 1.5f});
+                ++draw_count;
+            }
+        } else {
+            HUE_LOG_ERROR("glTF cube import failed; scene continues without it");
+        }
+        if (draw_count > 0) {
+            HUE_LOG_INFO("scene ready: %u meshes (fly: RMB look, WASD move, Q/E down/up, "
+                         "shift fast)",
+                         draw_count);
+        }
+    }
+    FlyCamera fly_camera;
+
     auto jobs = hue::JobSystem::create();
     if (!jobs) {
         HUE_LOG_ERROR("job system init failed");
@@ -353,10 +399,16 @@ int main(int argc, char** argv) {
             log_input_edges(input); // stand-in for the sim tick
         }
 
-        // Interpolation with timestep.alpha() starts mattering when the
-        // camera moves (Week 5); the triangle only needs a present.
         if (renderer_active) {
-            const auto drawn = renderer.value().draw_frame();
+            fly_camera.update(input, static_cast<float>(frame_seconds));
+            const hue::RendererStatus& render_status = renderer.value().status();
+            const float aspect =
+                render_status.swapchain_height > 0
+                    ? static_cast<float>(render_status.swapchain_width) /
+                          static_cast<float>(render_status.swapchain_height)
+                    : 16.0f / 9.0f;
+            const auto drawn =
+                renderer.value().draw_frame(fly_camera.camera(aspect), draws, draw_count);
             if (!drawn) {
                 HUE_LOG_ERROR("draw_frame failed; rendering disabled for this run");
                 renderer_active = false;

@@ -1,15 +1,19 @@
 // engine/render/include/hue/render/renderer.h
 //
-// Public renderer API (Week 4 spec). Vulkan stays entirely behind this
-// header, same boundary rule as GLFW behind window.h: game code sees
-// hue::Renderer, never a Vk* type. Instance/device/swapchain/VMA live in
-// the internal State; dynamic rendering, 2 frames in flight.
+// Public renderer API. Vulkan stays entirely behind this header, same
+// boundary rule as GLFW behind window.h: game code sees hue::Renderer,
+// never a Vk* type. Week 4: instance/device/swapchain/VMA, dynamic
+// rendering, 2 frames in flight. Week 5: static meshes through staging
+// buffers, depth attachment, camera + frustum-culled draw list.
 
 #pragma once
 
 #include <cstdint>
 
+#include "hue/asset/mesh_data.h"
 #include "hue/core/result.h"
+#include "hue/render/camera.h"
+#include "hue/render/mesh.h"
 
 namespace hue {
 
@@ -29,6 +33,14 @@ struct RendererStatus {
     std::uint32_t swapchain_width = 0;
     std::uint32_t swapchain_height = 0;
     std::uint64_t frames_rendered = 0;
+    std::uint32_t last_draws = 0;  // draw items rendered last frame
+    std::uint32_t last_culled = 0; // draw items rejected by the frustum
+};
+
+// One instance of an uploaded mesh in the frame's draw list.
+struct MeshDraw {
+    MeshHandle mesh;
+    Mat4 transform = Mat4::identity();
 };
 
 class Renderer {
@@ -44,14 +56,22 @@ public:
     Renderer& operator=(Renderer&&) = delete;
     ~Renderer();
 
-    // Records and submits one frame (clear + triangle). Swapchain
-    // recreation on resize/out-of-date is handled internally; a minimized
-    // window (0x0 framebuffer) is a successful no-op.
-    [[nodiscard]] Result<void> draw_frame();
+    // Uploads validated mesh data into device-local buffers via staging.
+    // Synchronous: intended for load time, not mid-frame streaming.
+    [[nodiscard]] Result<MeshHandle> upload_static_mesh(const asset::StaticMeshData& mesh);
+
+    // Records and submits one frame: draw items are frustum-culled against
+    // their mesh bounds, depth-tested, and lit by the mesh pipeline. With
+    // an empty list the Week 4 triangle draws instead, so a bare renderer
+    // still proves the swapchain works. Swapchain recreation on resize/
+    // out-of-date is handled internally; a minimized window is a no-op.
+    [[nodiscard]] Result<void> draw_frame(const Camera& camera, const MeshDraw* draws,
+                                          std::uint32_t draw_count);
+    [[nodiscard]] Result<void> draw_frame(); // identity camera, empty list
 
     // Runtime recompile hook: reloads .spv files from the shader directory
-    // and rebuilds the pipeline. On any failure the previous pipeline stays
-    // active and an error is returned (bad shader must never kill the run).
+    // and rebuilds all pipelines. On any failure the previous pipelines
+    // stay active and an error is returned.
     [[nodiscard]] Result<void> reload_shaders();
 
     [[nodiscard]] const RendererStatus& status() const noexcept;
