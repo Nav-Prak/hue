@@ -89,11 +89,13 @@ add_library(hue_render STATIC
     src/buffer.cpp
     src/context.cpp
     src/depth.cpp
+    src/descriptors.cpp
     src/mesh.cpp
     src/pipeline.cpp
     src/renderer.cpp
     src/spirv.cpp
     src/swapchain.cpp
+    src/texture.cpp
     src/vma_impl.cpp
 )
 add_library(hue::render ALIAS hue_render)

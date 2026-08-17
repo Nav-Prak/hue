@@ -9,6 +9,7 @@
 // validated glTF path) and flies a debug camera through them.
 // --frames N exits after N frames (CI smoke test).
 
+#include "characters.h"
 #include "fly_camera.h"
 #include "test_meshes.h"
 
@@ -283,10 +284,12 @@ int main(int argc, char** argv) {
     }
     bool renderer_active = renderer.has_value();
 
-    // Week 5 test content: procedural ground scene + a cube that proves the
-    // validated glTF import path in the live loop. Failures degrade to an
-    // emptier scene rather than aborting the run.
-    hue::MeshDraw draws[2];
+    // Week 5/6 test content: procedural ground scene (checker texture +
+    // PBR materials), a cube through the validated glTF path, and the two
+    // rigged characters imported with skeleton + clips (drawn in bind pose
+    // until GPU skinning lands in Week 7). Failures degrade to an emptier
+    // scene rather than aborting the run.
+    hue::MeshDraw draws[4];
     std::uint32_t draw_count = 0;
     if (renderer_active) {
         auto ground = build_ground_scene();
@@ -313,9 +316,47 @@ int main(int argc, char** argv) {
         } else {
             HUE_LOG_ERROR("glTF cube import failed; scene continues without it");
         }
+
+        const struct {
+            const char* file;
+            hue::Vec3 position;
+            float facing_degrees;
+        } characters[2] = {
+            {"player.glb", {-1.5f, 0.0f, 3.0f}, 160.0f},
+            {"enemy.glb", {1.5f, 0.0f, 3.0f}, 200.0f},
+        };
+        for (const auto& character : characters) {
+            auto skinned = load_character(character.file);
+            if (!skinned) {
+                continue; // already logged; scene continues without them
+            }
+            auto preview = bind_pose_preview(std::move(skinned.value()));
+            if (!preview) {
+                continue;
+            }
+            const auto uploaded = renderer.value().upload_static_mesh(preview.value());
+            if (uploaded) {
+                draws[draw_count].mesh = uploaded.value();
+                draws[draw_count].transform = hue::Mat4::trs(
+                    character.position,
+                    hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
+                                               hue::radians(character.facing_degrees)),
+                    {1.0f, 1.0f, 1.0f});
+                ++draw_count;
+            }
+        }
+
+        // Point lights (Week 6 spec: one directional + point lights): a
+        // warm torch over the pillar and a cool fill between the fighters.
+        const hue::PointLight point_lights[2] = {
+            {{0.0f, 4.2f, 0.0f}, 10.0f, {1.0f, 0.55f, 0.25f}, 14.0f},
+            {{0.0f, 1.8f, 4.5f}, 8.0f, {0.35f, 0.5f, 1.0f}, 8.0f},
+        };
+        renderer.value().set_point_lights(point_lights, 2);
+
         if (draw_count > 0) {
-            HUE_LOG_INFO("scene ready: %u meshes (fly: RMB look, WASD move, Q/E down/up, "
-                         "shift fast)",
+            HUE_LOG_INFO("scene ready: %u meshes, 2 point lights (fly: RMB look, WASD move, "
+                         "Q/E down/up, shift fast)",
                          draw_count);
         }
     }

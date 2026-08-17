@@ -64,6 +64,16 @@ struct Renderer::State {
     DepthState depth;
     PipelineState pipeline;
     MeshRegistry meshes;
+    DescriptorState descriptors;
+    SamplerCache samplers;
+
+    // 1x1 white backs both texture slots of untextured materials, so the
+    // shader path is uniform and factors alone drive the look.
+    GpuTexture white_texture;
+    GpuMaterial default_material;
+
+    PointLight point_lights[kMaxPointLights];
+    std::uint32_t point_light_count = 0;
 
     VkCommandPool command_pool = VK_NULL_HANDLE;
     VkCommandBuffer command_buffers[kFramesInFlight] = {};
@@ -108,10 +118,46 @@ void state_destroy(Renderer::State& state) {
     }
     destroy_sync_and_pool(state);
     mesh_registry_destroy(state.meshes, state.context);
+    texture_destroy(state.white_texture, state.context);
+    sampler_cache_destroy(state.samplers, state.context);
+    descriptors_destroy(state.descriptors, state.context);
     pipeline_destroy(state.pipeline, state.context);
     depth_destroy(state.depth, state.context);
     swapchain_destroy(state.swapchain, state.context);
     context_destroy(state.context);
+}
+
+// Uploads the shared 1x1 white texture and allocates the default material
+// set that untextured primitives bind.
+[[nodiscard]] Result<void> create_default_material(Renderer::State& state) {
+    asset::TextureData white;
+    white.width = 1;
+    white.height = 1;
+    const std::uint8_t pixels[4] = {255, 255, 255, 255};
+    if (!white.pixels.append(pixels, sizeof(pixels))) {
+        return ErrorCode::kOutOfMemory;
+    }
+    auto texture = texture_upload(state.context, white);
+    if (!texture) {
+        return texture.error();
+    }
+    state.white_texture = texture.value();
+
+    auto sampler = sampler_cache_get(state.samplers, state.context, VK_FILTER_LINEAR,
+                                     VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    if (!sampler) {
+        return sampler.error();
+    }
+    auto set = material_set_allocate(state.descriptors, state.context, state.white_texture.view,
+                                     state.white_texture.view, sampler.value());
+    if (!set) {
+        return set.error();
+    }
+    state.default_material.set = set.value();
+    state.default_material.base_color_factor = {0.62f, 0.66f, 0.74f, 1.0f};
+    state.default_material.metallic_factor = 0.0f;
+    state.default_material.roughness_factor = 0.85f;
+    return {};
 }
 
 [[nodiscard]] Result<void> create_sync_and_pool(Renderer::State& state) {
@@ -168,8 +214,9 @@ void state_destroy(Renderer::State& state) {
 }
 
 [[nodiscard]] Result<void> record_frame(Renderer::State& state, VkCommandBuffer cmd,
-                                        std::uint32_t image_index, const Camera& camera,
-                                        const MeshDraw* draws, std::uint32_t draw_count) {
+                                        std::uint32_t image_index, std::uint32_t frame,
+                                        const Camera& camera, const MeshDraw* draws,
+                                        std::uint32_t draw_count) {
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -258,10 +305,37 @@ void state_destroy(Renderer::State& state) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline.triangle);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     } else {
+        // Frame uniforms: camera + one directional light. The camera
+        // position falls out of the rigid inverse of the view matrix.
         const Mat4 view_projection = camera.view_projection();
+        const Mat4 camera_world = camera.view.inverted_rigid();
+        const Vec3 light_direction = normalize(Vec3{0.4f, -1.0f, 0.3f});
+
+        FrameUniforms uniforms;
+        uniforms.view_projection = view_projection;
+        uniforms.camera_position = {camera_world.at(0, 3), camera_world.at(1, 3),
+                                    camera_world.at(2, 3), 0.0f};
+        uniforms.light_direction = {light_direction.x, light_direction.y, light_direction.z,
+                                    static_cast<float>(state.point_light_count)};
+        uniforms.light_color = {1.0f, 0.96f, 0.9f, 3.0f}; // warm key light, intensity in w
+        uniforms.ambient_color = {0.05f, 0.055f, 0.07f, 0.0f};
+        for (std::uint32_t l = 0; l < state.point_light_count; ++l) {
+            const PointLight& light = state.point_lights[l];
+            uniforms.point_position_radius[l] = {light.position.x, light.position.y,
+                                                 light.position.z, light.radius};
+            uniforms.point_color_intensity[l] = {light.color.x, light.color.y, light.color.z,
+                                                 light.intensity};
+        }
+        std::memcpy(state.descriptors.frame_ubo_mapped[frame], &uniforms, sizeof(uniforms));
+
         const Frustum frustum = Frustum::from_view_projection(view_projection);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline.mesh);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                state.pipeline.mesh_layout, 0, 1,
+                                &state.descriptors.frame_sets[frame], 0, nullptr);
+
+        VkDescriptorSet bound_material = VK_NULL_HANDLE;
         for (std::uint32_t d = 0; d < draw_count; ++d) {
             const GpuMesh* mesh = mesh_registry_resolve(state.meshes, draws[d].mesh);
             if (mesh == nullptr) {
@@ -281,11 +355,28 @@ void state_destroy(Renderer::State& state) {
                 const asset::MeshPrimitive& primitive =
                     mesh->primitives[instance.primitive_index];
 
+                const GpuMaterial* material = &state.default_material;
+                if (primitive.material_index >= 0 &&
+                    static_cast<std::size_t>(primitive.material_index) <
+                        mesh->materials.size()) {
+                    material = &mesh->materials[static_cast<std::size_t>(
+                        primitive.material_index)];
+                }
+                if (material->set != bound_material) {
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            state.pipeline.mesh_layout, 1, 1, &material->set, 0,
+                                            nullptr);
+                    bound_material = material->set;
+                }
+
                 MeshPushConstants push;
                 push.model = draws[d].transform * instance.transform;
-                push.mvp = view_projection * push.model;
-                vkCmdPushConstants(cmd, state.pipeline.mesh_layout, VK_SHADER_STAGE_VERTEX_BIT,
-                                   0, sizeof(push), &push);
+                push.base_color = material->base_color_factor;
+                push.metallic_roughness = {material->metallic_factor,
+                                           material->roughness_factor, 0.0f, 0.0f};
+                vkCmdPushConstants(cmd, state.pipeline.mesh_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(push), &push);
                 vkCmdDrawIndexed(cmd, primitive.index_count, 1, primitive.first_index,
                                  primitive.vertex_offset, 0);
             }
@@ -352,11 +443,19 @@ Result<Renderer> Renderer::create(Window& window, const RendererDesc& desc) {
     if (!depth) {
         return fail(depth.error());
     }
+    const auto descriptors = descriptors_create(state->descriptors, state->context);
+    if (!descriptors) {
+        return fail(descriptors.error());
+    }
     const auto pipeline =
         pipeline_create(state->pipeline, state->context, state->swapchain.format,
-                        state->depth.format, state->shader_directory);
+                        state->depth.format, state->shader_directory, state->descriptors);
     if (!pipeline) {
         return fail(pipeline.error());
+    }
+    const auto defaults = create_default_material(*state);
+    if (!defaults) {
+        return fail(defaults.error());
     }
     const auto sync = create_sync_and_pool(*state);
     if (!sync) {
@@ -391,7 +490,21 @@ Renderer::~Renderer() {
 
 Result<MeshHandle> Renderer::upload_static_mesh(const asset::StaticMeshData& mesh) {
     HUE_PROFILE_ZONE("Renderer::upload_static_mesh");
-    return mesh_registry_upload(m_state->meshes, m_state->context, mesh);
+    return mesh_registry_upload(m_state->meshes, m_state->context, m_state->descriptors,
+                                m_state->samplers, m_state->white_texture.view,
+                                m_state->white_texture.view, mesh);
+}
+
+void Renderer::set_point_lights(const PointLight* lights, std::uint32_t count) {
+    if (count > kMaxPointLights) {
+        HUE_LOG_WARN("point light count %u exceeds cap %u; extras dropped", count,
+                     kMaxPointLights);
+        count = kMaxPointLights;
+    }
+    for (std::uint32_t l = 0; l < count; ++l) {
+        m_state->point_lights[l] = lights[l];
+    }
+    m_state->point_light_count = count;
 }
 
 Result<void> Renderer::draw_frame() {
@@ -440,7 +553,8 @@ Result<void> Renderer::draw_frame(const Camera& camera, const MeshDraw* draws,
 
     VkCommandBuffer cmd = state.command_buffers[frame];
     HUE_VK_TRY(vkResetCommandBuffer(cmd, 0));
-    const auto recorded = record_frame(state, cmd, image_index, camera, draws, draw_count);
+    const auto recorded = record_frame(state, cmd, image_index, frame, camera, draws,
+                                       draw_count);
     if (!recorded) {
         return recorded.error();
     }
@@ -497,7 +611,8 @@ Result<void> Renderer::reload_shaders() {
     // Build the replacement first; only touch the live pipeline on success.
     PipelineState fresh;
     const auto created = pipeline_create(fresh, state.context, state.swapchain.format,
-                                         state.depth.format, state.shader_directory);
+                                         state.depth.format, state.shader_directory,
+                                         state.descriptors);
     if (!created) {
         pipeline_destroy(fresh, state.context);
         HUE_LOG_WARN("shader reload failed; previous pipeline stays active");

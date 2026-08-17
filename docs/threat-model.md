@@ -27,8 +27,8 @@ remote code execution via gameplay netcode.
 |-------|-------------|--------|
 | glTF / GLB meshes | `hue::asset::load_gltf` | **Week 5** — validated, fuzzed |
 | SPIR-V shaders (reload) | `hue::validate_spirv_bytes` | Week 4 boundary check; full reflection hardening in Week 14 |
-| Textures / images | (not yet) | Week 6 |
-| Skinned / animated glTF | (not yet) | Weeks 6–7 |
+| Textures / images (PNG/JPEG) | `load_gltf` / `load_gltf_skinned` | **Week 6** — decoded via stb_image behind caps, fuzzed |
+| Skinned / animated glTF | `hue::asset::load_gltf_skinned` | **Week 6** — skeleton/clip validation, fuzzed; runtime sampling Week 7 |
 | Scene JSON | (not yet) | Week 12 |
 | Combat tuning JSON | (not yet) | Week 14 |
 
@@ -54,9 +54,63 @@ Defenses, in order:
 6. **Tagged heap** — parser allocations go through `MemoryTag::kAssets`
    with canaries in Debug/Sanitized builds.
 
-Fuzz entry point: `tools/fuzz/fuzz_gltf.cpp` → `load_gltf`. Seed corpus
-lives in `tools/fuzz/corpus/gltf`. CI runs a timed libFuzzer pass on
-Linux Clang + ASan/UBSan (see `.github/workflows/ci.yml`).
+Fuzz entry point: `tools/fuzz/fuzz_gltf.cpp` → `load_gltf` **and**
+`load_gltf_skinned` (every input runs through both). Seed corpus lives in
+`tools/fuzz/corpus/gltf` and includes skinned and textured samples. CI
+runs a timed libFuzzer pass on Linux Clang + ASan/UBSan (see
+`.github/workflows/ci.yml`).
+
+### Texture decode boundary (Week 6)
+
+Attacker goal: memory corruption inside the image decoder (historically
+the richest bug class in asset pipelines), or memory exhaustion via
+decompression bombs.
+
+Defenses:
+
+1. **Embedded-only images** — only buffer-view images load; URI-referenced
+   images (file paths or base64) are rejected (`kUnsupported`), so the
+   image path inherits the memory-only guarantee.
+2. **Restricted decoder build** — stb_image compiles with `STBI_ONLY_PNG`
+   + `STBI_ONLY_JPEG` + `STBI_NO_STDIO`; every other format's code path
+   does not exist in the binary.
+3. **Dimension cap in the decoder** — `STBI_MAX_DIMENSIONS 4096` rejects
+   oversized images before allocation, and the loader re-checks against
+   `kGltfMaxTextureDim`.
+4. **Decoded-byte budget** — total decoded RGBA across a file is capped
+   (`kGltfMaxDecodedTextureBytes`, checked with overflow-safe math), so a
+   64 MiB file cannot expand into gigabytes of pixels.
+5. **Tagged, canaried allocations** — stb allocations route through the
+   engine heap (`MemoryTag::kAssets`), so decode buffers get the same
+   canary/poison treatment as everything else and show up in memory
+   snapshots.
+6. **Texture count / material caps** — `kGltfMaxTextures`,
+   `kGltfMaxMaterials`; factors are clamped to [0, 1] and texture indices
+   bounds-checked.
+
+### Skin and animation clip boundary (Week 6)
+
+Attacker goal: out-of-range joint indices (GPU skinning reads a joint
+matrix array in Week 7 — an unchecked index is an out-of-bounds read on
+every vertex, every frame), NaN poisoning of pose math, or hangs via
+degenerate keyframe data.
+
+Defenses:
+
+1. **Joint caps and bounds** — ≤ `kGltfMaxJoints` (256) joints; every
+   `JOINTS_0` value is checked `< joint_count` before remapping. Weights
+   must be finite and non-negative and are renormalized to sum 1.
+2. **Topological reorder with cycle detection** — joints are stored
+   parent-before-child; a cyclic "hierarchy" is rejected instead of
+   hanging pose propagation.
+3. **Inverse bind + rest pose finiteness** — every matrix and TRS
+   component must be finite; matrix-transform joints are rejected
+   (`kUnsupported`) so Week 7 blending always has a valid TRS rest pose.
+4. **Keyframe track validation** — times finite, non-negative,
+   non-decreasing, ≤ `kGltfMaxClipSeconds`; key counts ≤
+   `kGltfMaxKeyframes`; output counts must match input counts; LINEAR
+   interpolation only; rotation keys must not be zero-length (they get
+   normalized at sampling time).
 
 ## Local debug surfaces
 
@@ -70,8 +124,7 @@ as untrusted text (bounded buffers, no `std::string` growth from input).
 
 ## Deferred
 
-- Texture decode (dimensions, mip counts, format abuse) — Week 6
-- Skin / animation clip validation — Weeks 6–7
+- Animation runtime hardening (sampling clamps, blend weight validation) — Week 7
 - Scene description JSON (capped counts, validated references) + dedicated
   fuzz harness — Week 12
 - Shader hot-reload reflection validation + fuzz — Week 14

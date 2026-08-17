@@ -43,6 +43,18 @@ struct MeshDraw {
     Mat4 transform = Mat4::identity();
 };
 
+// Local light sources for the PBR pass (Week 6 spec: one directional +
+// point lights). radius bounds the falloff window; intensity scales the
+// linear-space color.
+inline constexpr std::uint32_t kMaxPointLights = 4;
+
+struct PointLight {
+    Vec3 position{};
+    float radius = 10.0f;
+    Vec3 color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+};
+
 class Renderer {
 public:
     // Fails with kUnsupported when no Vulkan 1.3 device is available (no
@@ -59,6 +71,11 @@ public:
     // Uploads validated mesh data into device-local buffers via staging.
     // Synchronous: intended for load time, not mid-frame streaming.
     [[nodiscard]] Result<MeshHandle> upload_static_mesh(const asset::StaticMeshData& mesh);
+
+    // Replaces the frame's point lights (up to kMaxPointLights; extras are
+    // dropped with a log). The directional key light stays engine-managed
+    // until the lighting pass grows in Week 16.
+    void set_point_lights(const PointLight* lights, std::uint32_t count);
 
     // Records and submits one frame: draw items are frustum-culled against
     // their mesh bounds, depth-tested, and lit by the mesh pipeline. With

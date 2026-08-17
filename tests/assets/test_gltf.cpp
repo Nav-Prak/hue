@@ -11,6 +11,7 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -240,6 +241,181 @@ TEST_CASE("gltf: empty scene with no drawable meshes rejected") {
     GlbBuilder glb;
     glb.finish(json, std::strlen(json), nullptr, 0);
     auto mesh = load_gltf(glb.bytes.data(), glb.bytes.size());
+    REQUIRE(!mesh);
+    CHECK(mesh.error() == ErrorCode::kCorruptData);
+}
+
+// ------------------------------------------------------------- Week 6
+//
+// Texture/material and skin/clip coverage. Sample GLBs come from the
+// checked-in generator output (tools/assets/generate_characters.py), read
+// straight from the source tree; rejection cases build corrupt containers
+// in place.
+
+namespace {
+
+[[nodiscard]] std::vector<std::uint8_t> read_sample(const char* directory, const char* name) {
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/%s", directory, name);
+    std::FILE* file = std::fopen(path, "rb");
+    REQUIRE_MESSAGE(file != nullptr, path);
+    std::fseek(file, 0, SEEK_END);
+    const long size = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
+    REQUIRE(size > 0);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    REQUIRE(std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size());
+    std::fclose(file);
+    return bytes;
+}
+
+} // namespace
+
+TEST_CASE("gltf: textured triangle decodes PNG and material factors") {
+    const auto bytes = read_sample(HUE_TEST_CORPUS_DIR, "textured_min.glb");
+    auto mesh = load_gltf(bytes.data(), bytes.size());
+    REQUIRE(mesh);
+
+    REQUIRE(mesh.value().textures.size() == 1);
+    const hue::asset::TextureData& texture = mesh.value().textures[0];
+    CHECK(texture.width == 4);
+    CHECK(texture.height == 4);
+    CHECK(texture.pixels.size() == 4u * 4u * 4u);
+    CHECK(texture.srgb); // referenced as base color -> sRGB
+
+    REQUIRE(mesh.value().materials.size() == 1);
+    const hue::asset::MaterialData& material = mesh.value().materials[0];
+    CHECK(material.base_color_texture == 0);
+    CHECK(material.metallic_roughness_texture == -1);
+    CHECK(material.metallic_factor == doctest::Approx(0.5f));
+    CHECK(material.roughness_factor == doctest::Approx(0.5f));
+
+    REQUIRE(mesh.value().primitives.size() == 1);
+    CHECK(mesh.value().primitives[0].material_index == 0);
+}
+
+TEST_CASE("gltf: corrupt image bytes rejected") {
+    // Material references a texture whose buffer view holds garbage
+    // instead of PNG/JPEG bytes; stb_image must fail cleanly.
+    std::uint8_t bin[64];
+    std::memset(bin, 0xAB, sizeof(bin));
+    float positions[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    std::uint8_t full_bin[36 + 64];
+    std::memcpy(full_bin, positions, 36);
+    std::memcpy(full_bin + 36, bin, 64);
+
+    const char* json =
+        "{\"asset\":{\"version\":\"2.0\"},"
+        "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+        "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}],"
+        "\"textures\":[{\"source\":0}],"
+        "\"images\":[{\"bufferView\":1,\"mimeType\":\"image/png\"}],"
+        "\"accessors\":["
+        "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+        "\"min\":[0,0,0],\"max\":[1,1,0]}],"
+        "\"bufferViews\":["
+        "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":64}],"
+        "\"buffers\":[{\"byteLength\":100}]}";
+
+    GlbBuilder glb;
+    glb.finish(json, std::strlen(json), full_bin, static_cast<std::uint32_t>(sizeof(full_bin)));
+    auto mesh = load_gltf(glb.bytes.data(), glb.bytes.size());
+    REQUIRE(!mesh);
+    CHECK(mesh.error() == ErrorCode::kCorruptData);
+}
+
+TEST_CASE("gltf skinned: minimal skinned triangle loads") {
+    const auto bytes = read_sample(HUE_TEST_CORPUS_DIR, "skinned_min.glb");
+    auto mesh = hue::asset::load_gltf_skinned(bytes.data(), bytes.size());
+    REQUIRE(mesh);
+
+    // Skeleton: two joints, topologically ordered (root first).
+    REQUIRE(mesh.value().joints.size() == 2);
+    CHECK(mesh.value().joints[0].parent == -1);
+    CHECK(mesh.value().joints[1].parent == 0);
+
+    // Geometry: weights normalized, joint indices in range.
+    REQUIRE(mesh.value().vertices.size() == 3);
+    for (std::size_t v = 0; v < 3; ++v) {
+        const hue::asset::SkinnedVertex& vertex = mesh.value().vertices[v];
+        float sum = 0.0f;
+        for (float weight : vertex.weights) {
+            sum += weight;
+        }
+        CHECK(sum == doctest::Approx(1.0f));
+        for (std::uint16_t joint : vertex.joints) {
+            CHECK(joint < 2);
+        }
+    }
+
+    // Clip: one rotation channel targeting the tip joint.
+    REQUIRE(mesh.value().clips.size() == 1);
+    const hue::asset::AnimationClip& clip = mesh.value().clips[0];
+    CHECK(std::strcmp(clip.name, "wave") == 0);
+    CHECK(clip.duration == doctest::Approx(1.0f));
+    REQUIRE(clip.channels.size() == 1);
+    CHECK(clip.channels[0].path == hue::asset::AnimationPath::kRotation);
+    CHECK(clip.channels[0].joint == 1);
+    CHECK(clip.channels[0].times.size() == 2);
+    CHECK(clip.channels[0].values.size() == 8); // 2 keys * 4 components
+}
+
+TEST_CASE("gltf skinned: out-of-range joint index rejected") {
+    const auto bytes = read_sample(HUE_TEST_CORPUS_DIR, "skinned_bad_joint.glb");
+    auto mesh = hue::asset::load_gltf_skinned(bytes.data(), bytes.size());
+    REQUIRE(!mesh);
+    CHECK(mesh.error() == ErrorCode::kCorruptData);
+}
+
+TEST_CASE("gltf skinned: character imports with skeleton clips and texture") {
+    const auto bytes = read_sample(HUE_TEST_MODELS_DIR, "player.glb");
+    auto mesh = hue::asset::load_gltf_skinned(bytes.data(), bytes.size());
+    REQUIRE(mesh);
+
+    CHECK(mesh.value().joints.size() == 19);
+    CHECK(mesh.value().joints[0].parent == -1); // hips is the only root
+    for (std::size_t j = 1; j < mesh.value().joints.size(); ++j) {
+        CHECK(mesh.value().joints[j].parent >= 0);
+        CHECK(mesh.value().joints[j].parent < static_cast<std::int32_t>(j));
+    }
+
+    // Smooth skinning: the rig must carry genuinely blended vertices (two
+    // influences), not only rigid single-joint binds.
+    std::size_t blended_vertices = 0;
+    for (std::size_t v = 0; v < mesh.value().vertices.size(); ++v) {
+        const hue::asset::SkinnedVertex& vertex = mesh.value().vertices[v];
+        std::uint32_t influences = 0;
+        for (float weight : vertex.weights) {
+            if (weight > 0.0f) {
+                ++influences;
+            }
+        }
+        if (influences >= 2) {
+            ++blended_vertices;
+        }
+    }
+    CHECK(blended_vertices > 0);
+
+    REQUIRE(mesh.value().clips.size() == 5);
+    const char* expected_clips[5] = {"locomotion", "attack", "dodge", "hit_react", "death"};
+    for (std::size_t c = 0; c < 5; ++c) {
+        CHECK(std::strcmp(mesh.value().clips[c].name, expected_clips[c]) == 0);
+        CHECK(mesh.value().clips[c].duration > 0.0f);
+        CHECK(mesh.value().clips[c].channels.size() > 0);
+    }
+
+    REQUIRE(mesh.value().textures.size() == 1);
+    CHECK(mesh.value().textures[0].width == 64);
+    CHECK(mesh.value().textures[0].srgb);
+    REQUIRE(mesh.value().materials.size() == 1);
+    CHECK(mesh.value().materials[0].base_color_texture == 0);
+}
+
+TEST_CASE("gltf skinned: static-only file rejected by skinned path") {
+    const GlbBuilder glb = make_triangle_glb();
+    auto mesh = hue::asset::load_gltf_skinned(glb.bytes.data(), glb.bytes.size());
     REQUIRE(!mesh);
     CHECK(mesh.error() == ErrorCode::kCorruptData);
 }

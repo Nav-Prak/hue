@@ -1,17 +1,37 @@
 // engine/render/src/mesh.cpp
 //
 // GPU mesh registry: fixed slot table with generation counters. Upload
-// copies validated StaticMeshData into device-local buffers and keeps the
-// CPU-side primitive/instance tables for draw recording.
+// copies validated StaticMeshData into device-local buffers, uploads the
+// mesh's textures with full mip chains, and allocates one descriptor set
+// per material (untextured slots fall back to the renderer's 1x1 whites).
 
 #include "vk_types.h"
 
 namespace hue::render {
 
 Result<MeshHandle> mesh_registry_upload(MeshRegistry& registry, const ContextState& context,
+                                        DescriptorState& descriptors, SamplerCache& samplers,
+                                        VkImageView fallback_base_color,
+                                        VkImageView fallback_metallic_roughness,
                                         const asset::StaticMeshData& data) {
     if (data.vertices.size() == 0 || data.indices.size() == 0 || data.primitives.size() == 0) {
         return ErrorCode::kInvalidArgument;
+    }
+    // Loader-validated data keeps these invariants; procedural callers must
+    // uphold them too, so re-check at the upload boundary.
+    for (std::size_t p = 0; p < data.primitives.size(); ++p) {
+        const std::int32_t material = data.primitives[p].material_index;
+        if (material >= static_cast<std::int32_t>(data.materials.size())) {
+            return ErrorCode::kInvalidArgument;
+        }
+    }
+    for (std::size_t m = 0; m < data.materials.size(); ++m) {
+        if (data.materials[m].base_color_texture >=
+                static_cast<std::int32_t>(data.textures.size()) ||
+            data.materials[m].metallic_roughness_texture >=
+                static_cast<std::int32_t>(data.textures.size())) {
+            return ErrorCode::kInvalidArgument;
+        }
     }
 
     std::uint32_t slot = UINT32_MAX;
@@ -27,31 +47,86 @@ Result<MeshHandle> mesh_registry_upload(MeshRegistry& registry, const ContextSta
     }
     GpuMesh& mesh = registry.slots[slot];
 
+    auto release = [&]() {
+        buffer_destroy(mesh.vertices, context);
+        buffer_destroy(mesh.indices, context);
+        for (std::size_t t = 0; t < mesh.textures.size(); ++t) {
+            texture_destroy(mesh.textures[t], context);
+        }
+        mesh.textures.clear();
+        mesh.materials.clear();
+        mesh.primitives.clear();
+        mesh.instances.clear();
+    };
+
+    // ---- geometry
     auto vertices = device_buffer_create(context, data.vertices.data(),
                                          data.vertices.size() * sizeof(asset::StaticVertex),
                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     if (!vertices) {
         return vertices.error();
     }
+    mesh.vertices = vertices.value();
+
     auto indices = device_buffer_create(context, data.indices.data(),
                                         data.indices.size() * sizeof(std::uint32_t),
                                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
     if (!indices) {
-        BufferAllocation vertex_buffer = vertices.value();
-        buffer_destroy(vertex_buffer, context);
+        release();
         return indices.error();
     }
-
-    mesh.vertices = vertices.value();
     mesh.indices = indices.value();
 
-    auto release = [&]() {
-        buffer_destroy(mesh.vertices, context);
-        buffer_destroy(mesh.indices, context);
-        mesh.primitives.clear();
-        mesh.instances.clear();
-    };
+    // ---- textures (full mip chains)
+    for (std::size_t t = 0; t < data.textures.size(); ++t) {
+        auto texture = texture_upload(context, data.textures[t]);
+        if (!texture) {
+            release();
+            return texture.error();
+        }
+        if (!mesh.textures.push_back(std::move(texture.value()))) {
+            release();
+            return ErrorCode::kOutOfMemory;
+        }
+    }
 
+    // ---- materials (one descriptor set each)
+    auto sampler = sampler_cache_get(samplers, context, VK_FILTER_LINEAR,
+                                     VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    if (!sampler) {
+        release();
+        return sampler.error();
+    }
+    for (std::size_t m = 0; m < data.materials.size(); ++m) {
+        const asset::MaterialData& source = data.materials[m];
+        GpuMaterial material;
+        material.base_color_factor = source.base_color_factor;
+        material.metallic_factor = source.metallic_factor;
+        material.roughness_factor = source.roughness_factor;
+
+        const VkImageView base_color =
+            source.base_color_texture >= 0
+                ? mesh.textures[static_cast<std::size_t>(source.base_color_texture)].view
+                : fallback_base_color;
+        const VkImageView metallic_roughness =
+            source.metallic_roughness_texture >= 0
+                ? mesh.textures[static_cast<std::size_t>(source.metallic_roughness_texture)].view
+                : fallback_metallic_roughness;
+
+        auto set = material_set_allocate(descriptors, context, base_color, metallic_roughness,
+                                         sampler.value());
+        if (!set) {
+            release();
+            return set.error();
+        }
+        material.set = set.value();
+        if (!mesh.materials.push_back(material)) {
+            release();
+            return ErrorCode::kOutOfMemory;
+        }
+    }
+
+    // ---- CPU-side draw tables
     for (std::size_t p = 0; p < data.primitives.size(); ++p) {
         if (!mesh.primitives.push_back(data.primitives[p])) {
             release();
@@ -72,8 +147,10 @@ Result<MeshHandle> mesh_registry_upload(MeshRegistry& registry, const ContextSta
     MeshHandle handle;
     handle.slot = slot;
     handle.generation = mesh.generation;
-    HUE_LOG_INFO("mesh uploaded: slot %u, %zu vertices, %zu indices, %zu primitives", slot,
-                 data.vertices.size(), data.indices.size(), data.primitives.size());
+    HUE_LOG_INFO("mesh uploaded: slot %u, %zu vertices, %zu indices, %zu primitives, "
+                 "%zu textures, %zu materials",
+                 slot, data.vertices.size(), data.indices.size(), data.primitives.size(),
+                 data.textures.size(), data.materials.size());
     return handle;
 }
 
@@ -94,6 +171,11 @@ void mesh_registry_destroy(MeshRegistry& registry, const ContextState& context) 
         if (mesh.used) {
             buffer_destroy(mesh.vertices, context);
             buffer_destroy(mesh.indices, context);
+            for (std::size_t t = 0; t < mesh.textures.size(); ++t) {
+                texture_destroy(mesh.textures[t], context);
+            }
+            mesh.textures.clear();
+            mesh.materials.clear();
             mesh.primitives.clear();
             mesh.instances.clear();
             mesh.used = false;

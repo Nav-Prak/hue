@@ -218,7 +218,8 @@ graphics_pipeline_create(const ContextState& context, const char* shader_directo
 
 Result<void> pipeline_create(PipelineState& pipeline, const ContextState& context,
                              VkFormat color_format, VkFormat depth_format,
-                             const char* shader_directory) {
+                             const char* shader_directory,
+                             const DescriptorState& descriptors) {
     // ---- layouts (created once, survive shader reloads)
     if (pipeline.triangle_layout == VK_NULL_HANDLE) {
         VkPipelineLayoutCreateInfo layout_info{};
@@ -227,12 +228,19 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
                                           &pipeline.triangle_layout));
     }
     if (pipeline.mesh_layout == VK_NULL_HANDLE) {
+        // Set 0: frame UBO. Set 1: material textures. Push constants carry
+        // the model matrix (vertex) and material factors (fragment).
+        VkDescriptorSetLayout set_layouts[2] = {descriptors.frame_layout,
+                                                descriptors.material_layout};
+
         VkPushConstantRange push_range{};
-        push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push_range.size = sizeof(MeshPushConstants);
 
         VkPipelineLayoutCreateInfo layout_info{};
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout_info.setLayoutCount = 2;
+        layout_info.pSetLayouts = set_layouts;
         layout_info.pushConstantRangeCount = 1;
         layout_info.pPushConstantRanges = &push_range;
         HUE_VK_TRY(vkCreatePipelineLayout(context.device, &layout_info, nullptr,

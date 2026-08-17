@@ -13,6 +13,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -94,6 +95,31 @@ public:
         }
         std::construct_at(m_data + m_size, std::move(value));
         ++m_size;
+        return {};
+    }
+
+    // Bulk copy-in for trivially copyable payloads (pixel rows, keyframe
+    // tracks). One growth + one memcpy instead of count push_backs.
+    [[nodiscard]] Result<void> append(const T* values, std::size_t count) {
+        static_assert(std::is_trivially_copyable_v<T>,
+                      "Array::append requires trivially copyable elements");
+        HUE_PROFILE_ZONE("Array::append");
+        if (count == 0) {
+            return {};
+        }
+        if (values == nullptr) {
+            return ErrorCode::kInvalidArgument;
+        }
+        std::size_t required = 0;
+        if (!checked_add(m_size, count, required)) {
+            return ErrorCode::kOutOfMemory;
+        }
+        auto grown = reserve(required);
+        if (!grown) {
+            return grown.error();
+        }
+        std::memcpy(m_data + m_size, values, count * sizeof(T));
+        m_size = required;
         return {};
     }
 

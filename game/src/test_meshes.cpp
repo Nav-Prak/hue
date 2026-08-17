@@ -79,16 +79,45 @@ using hue::asset::StaticVertex;
 }
 
 [[nodiscard]] hue::Result<void> close_primitive(StaticMeshData& data, std::uint32_t& first_index,
-                                                std::uint32_t& first_vertex) {
+                                                std::uint32_t& first_vertex,
+                                                std::int32_t material_index) {
     MeshPrimitive primitive;
     primitive.first_index = first_index;
     primitive.index_count = static_cast<std::uint32_t>(data.indices.size()) - first_index;
     primitive.vertex_offset = 0; // indices in this builder are absolute
+    primitive.material_index = material_index;
     if (!data.primitives.push_back(primitive)) {
         return hue::ErrorCode::kOutOfMemory;
     }
     first_index = static_cast<std::uint32_t>(data.indices.size());
     first_vertex = static_cast<std::uint32_t>(data.vertices.size());
+    return {};
+}
+
+// Procedural 256x256 checker albedo (Week 6: the in-shader checker moved
+// into a real sampled texture with a full mip chain).
+[[nodiscard]] hue::Result<void> append_checker_texture(StaticMeshData& data) {
+    hue::asset::TextureData texture;
+    texture.width = 256;
+    texture.height = 256;
+    texture.srgb = true;
+
+    std::uint8_t row[256 * 4];
+    for (std::uint32_t y = 0; y < 256; ++y) {
+        for (std::uint32_t x = 0; x < 256; ++x) {
+            const bool light = ((x / 32) + (y / 32)) % 2 == 0;
+            row[x * 4 + 0] = light ? 168 : 132;
+            row[x * 4 + 1] = light ? 172 : 138;
+            row[x * 4 + 2] = light ? 182 : 152;
+            row[x * 4 + 3] = 255;
+        }
+        if (!texture.pixels.append(row, sizeof(row))) {
+            return hue::ErrorCode::kOutOfMemory;
+        }
+    }
+    if (!data.textures.push_back(std::move(texture))) {
+        return hue::ErrorCode::kOutOfMemory;
+    }
     return {};
 }
 
@@ -99,12 +128,33 @@ hue::Result<StaticMeshData> build_ground_scene() {
     std::uint32_t first_index = 0;
     std::uint32_t first_vertex = 0;
 
-    // Primitive 0: 40x40m ground plane at y=0.
-    auto step = append_face(data, {}, Vec3{40.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, -40.0f}, 16.0f);
+    // Material 0: checker-textured ground. Material 1: untextured painted
+    // metal for the boxes (factors only, white fallback texture).
+    auto step = append_checker_texture(data);
     if (!step) {
         return step.error();
     }
-    step = close_primitive(data, first_index, first_vertex);
+    hue::asset::MaterialData ground_material;
+    ground_material.base_color_texture = 0;
+    ground_material.metallic_factor = 0.0f;
+    ground_material.roughness_factor = 0.9f;
+    if (!data.materials.push_back(ground_material)) {
+        return hue::ErrorCode::kOutOfMemory;
+    }
+    hue::asset::MaterialData box_material;
+    box_material.base_color_factor = {0.32f, 0.42f, 0.68f, 1.0f};
+    box_material.metallic_factor = 0.85f;
+    box_material.roughness_factor = 0.35f;
+    if (!data.materials.push_back(box_material)) {
+        return hue::ErrorCode::kOutOfMemory;
+    }
+
+    // Primitive 0: 40x40m ground plane at y=0.
+    step = append_face(data, {}, Vec3{40.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, -40.0f}, 16.0f);
+    if (!step) {
+        return step.error();
+    }
+    step = close_primitive(data, first_index, first_vertex, 0);
     if (!step) {
         return step.error();
     }
@@ -114,7 +164,7 @@ hue::Result<StaticMeshData> build_ground_scene() {
     if (!step) {
         return step.error();
     }
-    step = close_primitive(data, first_index, first_vertex);
+    step = close_primitive(data, first_index, first_vertex, 1);
     if (!step) {
         return step.error();
     }
@@ -178,7 +228,10 @@ hue::Result<StaticMeshData> build_gltf_cube() {
         "{\"asset\":{\"version\":\"2.0\"},"
         "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
         "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"NORMAL\":1,"
-        "\"TEXCOORD_0\":2},\"indices\":3}]}],"
+        "\"TEXCOORD_0\":2},\"indices\":3,\"material\":0}]}],"
+        "\"materials\":[{\"pbrMetallicRoughness\":{"
+        "\"baseColorFactor\":[0.85,0.45,0.15,1.0],"
+        "\"metallicFactor\":0.15,\"roughnessFactor\":0.45}}],"
         "\"accessors\":["
         "{\"bufferView\":0,\"componentType\":5126,\"count\":%u,\"type\":\"VEC3\","
         "\"min\":[-0.5,-0.5,-0.5],\"max\":[0.5,0.5,0.5]},"

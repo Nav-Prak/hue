@@ -30,6 +30,10 @@ add_executable(hue_tests
 # The no-exceptions flags propagate from hue_core, so run doctest in its
 # supported no-exceptions mode (failed asserts terminate instead of throwing).
 target_compile_definitions(hue_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
+# Week 6 loader tests read generated sample assets straight from the tree.
+target_compile_definitions(hue_tests PRIVATE
+    HUE_TEST_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tools/fuzz/corpus/gltf"
+    HUE_TEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/assets/models")
 target_link_libraries(hue_tests PRIVATE hue_core hue::asset hue::render doctest::doctest hue::options)
 if(MSVC)
     # VS 2026 warns on doctest 2.4.12's intentional std::tuple specialization.
