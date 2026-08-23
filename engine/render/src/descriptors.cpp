@@ -42,17 +42,32 @@ Result<void> descriptors_create(DescriptorState& descriptors, const ContextState
     HUE_VK_TRY(vkCreateDescriptorSetLayout(context.device, &material_layout_info, nullptr,
                                            &descriptors.material_layout));
 
+    // ---- set 2 layout: per-frame packed joint matrices (std430 SSBO)
+    VkDescriptorSetLayoutBinding skin_binding{};
+    skin_binding.binding = 0;
+    skin_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    skin_binding.descriptorCount = 1;
+    skin_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    VkDescriptorSetLayoutCreateInfo skin_layout_info{};
+    skin_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    skin_layout_info.bindingCount = 1;
+    skin_layout_info.pBindings = &skin_binding;
+    HUE_VK_TRY(vkCreateDescriptorSetLayout(context.device, &skin_layout_info, nullptr,
+                                           &descriptors.skin_layout));
+
     // ---- pool: frame sets + up to kMaxMaterialSets material sets
-    VkDescriptorPoolSize pool_sizes[2]{};
+    VkDescriptorPoolSize pool_sizes[3]{};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     pool_sizes[0].descriptorCount = kFramesInFlight;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     pool_sizes[1].descriptorCount = kMaxMaterialSets * 2;
+    pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    pool_sizes[2].descriptorCount = kFramesInFlight;
 
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_info.maxSets = kFramesInFlight + kMaxMaterialSets;
-    pool_info.poolSizeCount = 2;
+    pool_info.maxSets = kFramesInFlight * 2 + kMaxMaterialSets;
+    pool_info.poolSizeCount = 3;
     pool_info.pPoolSizes = pool_sizes;
     HUE_VK_TRY(vkCreateDescriptorPool(context.device, &pool_info, nullptr, &descriptors.pool));
 
@@ -95,6 +110,27 @@ Result<void> descriptors_create(DescriptorState& descriptors, const ContextState
         write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         write.pBufferInfo = &buffer_write;
         vkUpdateDescriptorSets(context.device, 1, &write, 0, nullptr);
+
+        const VkDeviceSize skin_buffer_size = static_cast<VkDeviceSize>(kMaxSkinnedDraws) *
+                                              asset::kGltfMaxJoints * sizeof(Mat4);
+        buffer_info.size = skin_buffer_size;
+        buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        VmaAllocationInfo skin_mapped{};
+        HUE_VK_TRY(vmaCreateBuffer(context.allocator, &buffer_info, &alloc_info,
+                                   &descriptors.skin_buffers[frame].buffer,
+                                   &descriptors.skin_buffers[frame].allocation, &skin_mapped));
+        descriptors.skin_buffer_mapped[frame] = skin_mapped.pMappedData;
+
+        set_info.pSetLayouts = &descriptors.skin_layout;
+        HUE_VK_TRY(vkAllocateDescriptorSets(context.device, &set_info,
+                                            &descriptors.skin_sets[frame]));
+        VkDescriptorBufferInfo skin_write_info{};
+        skin_write_info.buffer = descriptors.skin_buffers[frame].buffer;
+        skin_write_info.range = skin_buffer_size;
+        write.dstSet = descriptors.skin_sets[frame];
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &skin_write_info;
+        vkUpdateDescriptorSets(context.device, 1, &write, 0, nullptr);
     }
     return {};
 }
@@ -102,8 +138,11 @@ Result<void> descriptors_create(DescriptorState& descriptors, const ContextState
 void descriptors_destroy(DescriptorState& descriptors, const ContextState& context) {
     for (std::uint32_t frame = 0; frame < kFramesInFlight; ++frame) {
         buffer_destroy(descriptors.frame_ubos[frame], context);
+        buffer_destroy(descriptors.skin_buffers[frame], context);
         descriptors.frame_ubo_mapped[frame] = nullptr;
+        descriptors.skin_buffer_mapped[frame] = nullptr;
         descriptors.frame_sets[frame] = VK_NULL_HANDLE;
+        descriptors.skin_sets[frame] = VK_NULL_HANDLE;
     }
     if (descriptors.pool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(context.device, descriptors.pool, nullptr);
@@ -112,6 +151,10 @@ void descriptors_destroy(DescriptorState& descriptors, const ContextState& conte
     if (descriptors.material_layout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(context.device, descriptors.material_layout, nullptr);
         descriptors.material_layout = VK_NULL_HANDLE;
+    }
+    if (descriptors.skin_layout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(context.device, descriptors.skin_layout, nullptr);
+        descriptors.skin_layout = VK_NULL_HANDLE;
     }
     if (descriptors.frame_layout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(context.device, descriptors.frame_layout, nullptr);

@@ -334,16 +334,55 @@ void state_destroy(Renderer::State& state) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 state.pipeline.mesh_layout, 0, 1,
                                 &state.descriptors.frame_sets[frame], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                state.pipeline.mesh_layout, 2, 1,
+                                &state.descriptors.skin_sets[frame], 0, nullptr);
 
         VkDescriptorSet bound_material = VK_NULL_HANDLE;
+        VkPipeline bound_pipeline = state.pipeline.mesh;
+        std::uint32_t skinned_draw_count = 0;
         for (std::uint32_t d = 0; d < draw_count; ++d) {
             const GpuMesh* mesh = mesh_registry_resolve(state.meshes, draws[d].mesh);
             if (mesh == nullptr) {
                 continue; // stale handle; upload path already logged
             }
-            if (!frustum.intersects(mesh->bounds.transformed(draws[d].transform))) {
+            if (!mesh->skinned &&
+                !frustum.intersects(mesh->bounds.transformed(draws[d].transform))) {
                 ++culled;
                 continue;
+            }
+
+            std::uint32_t skin_offset = 0;
+            if (mesh->skinned) {
+                if (draws[d].joint_matrices == nullptr ||
+                    draws[d].joint_count != mesh->joint_count) {
+                    HUE_LOG_WARN("skinned draw has no valid %u-joint palette", mesh->joint_count);
+                    continue;
+                }
+                if (skinned_draw_count >= kMaxSkinnedDraws) {
+                    HUE_LOG_WARN("skinned draw cap reached (%u)", kMaxSkinnedDraws);
+                    continue;
+                }
+                skin_offset = skinned_draw_count * asset::kGltfMaxJoints;
+                const VkDeviceSize byte_offset =
+                    static_cast<VkDeviceSize>(skin_offset) * sizeof(Mat4);
+                const VkDeviceSize byte_size =
+                    static_cast<VkDeviceSize>(mesh->joint_count) * sizeof(Mat4);
+                auto* destination = static_cast<std::byte*>(
+                    state.descriptors.skin_buffer_mapped[frame]);
+                std::memcpy(destination + byte_offset, draws[d].joint_matrices,
+                            static_cast<std::size_t>(byte_size));
+                HUE_VK_TRY(vmaFlushAllocation(state.context.allocator,
+                                              state.descriptors.skin_buffers[frame].allocation,
+                                              byte_offset, byte_size));
+                ++skinned_draw_count;
+            }
+
+            const VkPipeline wanted_pipeline =
+                mesh->skinned ? state.pipeline.skinned_mesh : state.pipeline.mesh;
+            if (wanted_pipeline != bound_pipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wanted_pipeline);
+                bound_pipeline = wanted_pipeline;
             }
 
             const VkDeviceSize zero_offset = 0;
@@ -374,6 +413,7 @@ void state_destroy(Renderer::State& state) {
                 push.base_color = material->base_color_factor;
                 push.metallic_roughness = {material->metallic_factor,
                                            material->roughness_factor, 0.0f, 0.0f};
+                push.skin_offset = skin_offset;
                 vkCmdPushConstants(cmd, state.pipeline.mesh_layout,
                                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                    sizeof(push), &push);
@@ -493,6 +533,13 @@ Result<MeshHandle> Renderer::upload_static_mesh(const asset::StaticMeshData& mes
     return mesh_registry_upload(m_state->meshes, m_state->context, m_state->descriptors,
                                 m_state->samplers, m_state->white_texture.view,
                                 m_state->white_texture.view, mesh);
+}
+
+Result<MeshHandle> Renderer::upload_skinned_mesh(const asset::SkinnedMeshData& mesh) {
+    HUE_PROFILE_ZONE("Renderer::upload_skinned_mesh");
+    return mesh_registry_upload_skinned(
+        m_state->meshes, m_state->context, m_state->descriptors, m_state->samplers,
+        m_state->white_texture.view, m_state->white_texture.view, mesh);
 }
 
 void Renderer::set_point_lights(const PointLight* lights, std::uint32_t count) {

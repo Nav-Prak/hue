@@ -41,6 +41,10 @@ struct RendererStatus {
 struct MeshDraw {
     MeshHandle mesh;
     Mat4 transform = Mat4::identity();
+    // Required only for meshes uploaded through upload_skinned_mesh. The
+    // palette is copied into the renderer's per-frame GPU buffer before draw.
+    const Mat4* joint_matrices = nullptr;
+    std::uint32_t joint_count = 0;
 };
 
 // Local light sources for the PBR pass (Week 6 spec: one directional +
@@ -71,6 +75,7 @@ public:
     // Uploads validated mesh data into device-local buffers via staging.
     // Synchronous: intended for load time, not mid-frame streaming.
     [[nodiscard]] Result<MeshHandle> upload_static_mesh(const asset::StaticMeshData& mesh);
+    [[nodiscard]] Result<MeshHandle> upload_skinned_mesh(const asset::SkinnedMeshData& mesh);
 
     // Replaces the frame's point lights (up to kMaxPointLights; extras are
     // dropped with a log). The directional key light stays engine-managed

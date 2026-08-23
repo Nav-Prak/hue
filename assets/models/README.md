@@ -34,5 +34,12 @@ Everything the Week 6 spec requires the importer to handle:
 - Five LINEAR clips: `locomotion`, `attack`, `dodge`, `hit_react`,
   `death` — the clip set the combat state machine consumes from Week 9.
 
-They render in bind pose (T-pose) until the animation runtime lands in
-Week 7.
+The Week 7 runtime samples these clips into frame-arena poses, crossfades
+between locomotion and one-shots, and uploads joint palettes for GPU skinning.
+The adjacent `*.events.json` files provide validated attack, cancel, hitbox,
+invulnerability, and footstep timing without modifying the GLBs.
+
+The runtime also exposes and tests a generic two-clip 1D blend primitive.
+These generated assets contain only one locomotion clip, so the live demo uses
+the documented crossfade-only fallback rather than claiming a live idle/walk/run
+blend tree. World-space character movement begins with ECS/Jolt in Week 8.

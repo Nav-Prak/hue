@@ -66,45 +66,14 @@ hue::Result<hue::asset::SkinnedMeshData> load_character(const char* file_name) {
     return skinned;
 }
 
-hue::Result<hue::asset::StaticMeshData> bind_pose_preview(hue::asset::SkinnedMeshData&& skinned) {
-    hue::asset::StaticMeshData preview;
-
-    if (!preview.vertices.reserve(skinned.vertices.size())) {
-        return hue::ErrorCode::kOutOfMemory;
+hue::Result<hue::anim::AnimationEventTrack> load_character_events(const char* file_name) {
+    char path[512];
+    std::snprintf(path, sizeof(path), "assets/models/%s", file_name);
+    char full_path[1024];
+    executable_relative(full_path, sizeof(full_path), path);
+    auto events = hue::anim::load_animation_events_file(full_path);
+    if (!events) {
+        HUE_LOG_WARN("animation event track failed: %s", full_path);
     }
-    for (std::size_t v = 0; v < skinned.vertices.size(); ++v) {
-        hue::asset::StaticVertex vertex;
-        vertex.position = skinned.vertices[v].position;
-        vertex.normal = skinned.vertices[v].normal;
-        vertex.uv = skinned.vertices[v].uv;
-        if (!preview.vertices.push_back(vertex)) {
-            return hue::ErrorCode::kOutOfMemory;
-        }
-    }
-    if (!preview.indices.append(skinned.indices.data(), skinned.indices.size())) {
-        return hue::ErrorCode::kOutOfMemory;
-    }
-    for (std::size_t p = 0; p < skinned.primitives.size(); ++p) {
-        if (!preview.primitives.push_back(skinned.primitives[p])) {
-            return hue::ErrorCode::kOutOfMemory;
-        }
-        hue::asset::MeshInstance instance;
-        instance.primitive_index = static_cast<std::uint32_t>(p);
-        instance.transform = hue::Mat4::identity();
-        if (!preview.instances.push_back(instance)) {
-            return hue::ErrorCode::kOutOfMemory;
-        }
-    }
-    for (std::size_t t = 0; t < skinned.textures.size(); ++t) {
-        if (!preview.textures.push_back(std::move(skinned.textures[t]))) {
-            return hue::ErrorCode::kOutOfMemory;
-        }
-    }
-    for (std::size_t m = 0; m < skinned.materials.size(); ++m) {
-        if (!preview.materials.push_back(skinned.materials[m])) {
-            return hue::ErrorCode::kOutOfMemory;
-        }
-    }
-    preview.bounds = skinned.bounds;
-    return preview;
+    return events;
 }

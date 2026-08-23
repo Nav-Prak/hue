@@ -230,8 +230,9 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
     if (pipeline.mesh_layout == VK_NULL_HANDLE) {
         // Set 0: frame UBO. Set 1: material textures. Push constants carry
         // the model matrix (vertex) and material factors (fragment).
-        VkDescriptorSetLayout set_layouts[2] = {descriptors.frame_layout,
-                                                descriptors.material_layout};
+        VkDescriptorSetLayout set_layouts[3] = {descriptors.frame_layout,
+                                                descriptors.material_layout,
+                                                descriptors.skin_layout};
 
         VkPushConstantRange push_range{};
         push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -239,7 +240,7 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
 
         VkPipelineLayoutCreateInfo layout_info{};
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout_info.setLayoutCount = 2;
+        layout_info.setLayoutCount = 3;
         layout_info.pSetLayouts = set_layouts;
         layout_info.pushConstantRangeCount = 1;
         layout_info.pPushConstantRanges = &push_range;
@@ -290,8 +291,41 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
         return mesh.error();
     }
 
+    VkVertexInputBindingDescription skinned_binding{};
+    skinned_binding.binding = 0;
+    skinned_binding.stride = sizeof(asset::SkinnedVertex);
+    skinned_binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription skinned_attributes[5]{};
+    skinned_attributes[0] = attributes[0];
+    skinned_attributes[0].offset = offsetof(asset::SkinnedVertex, position);
+    skinned_attributes[1] = attributes[1];
+    skinned_attributes[1].offset = offsetof(asset::SkinnedVertex, normal);
+    skinned_attributes[2] = attributes[2];
+    skinned_attributes[2].offset = offsetof(asset::SkinnedVertex, uv);
+    skinned_attributes[3].location = 3;
+    skinned_attributes[3].format = VK_FORMAT_R16G16B16A16_UINT;
+    skinned_attributes[3].offset = offsetof(asset::SkinnedVertex, joints);
+    skinned_attributes[4].location = 4;
+    skinned_attributes[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    skinned_attributes[4].offset = offsetof(asset::SkinnedVertex, weights);
+    VkPipelineVertexInputStateCreateInfo skinned_input{};
+    skinned_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    skinned_input.vertexBindingDescriptionCount = 1;
+    skinned_input.pVertexBindingDescriptions = &skinned_binding;
+    skinned_input.vertexAttributeDescriptionCount = 5;
+    skinned_input.pVertexAttributeDescriptions = skinned_attributes;
+    auto skinned = graphics_pipeline_create(context, shader_directory, "skinned_mesh.vert.spv",
+                                            "mesh.frag.spv", pipeline.mesh_layout, color_format,
+                                            depth_format, skinned_input, true);
+    if (!skinned) {
+        vkDestroyPipeline(context.device, triangle.value(), nullptr);
+        vkDestroyPipeline(context.device, mesh.value(), nullptr);
+        return skinned.error();
+    }
+
     pipeline.triangle = triangle.value();
     pipeline.mesh = mesh.value();
+    pipeline.skinned_mesh = skinned.value();
     return {};
 }
 
@@ -303,6 +337,10 @@ void pipeline_destroy(PipelineState& pipeline, const ContextState& context) {
     if (pipeline.mesh != VK_NULL_HANDLE) {
         vkDestroyPipeline(context.device, pipeline.mesh, nullptr);
         pipeline.mesh = VK_NULL_HANDLE;
+    }
+    if (pipeline.skinned_mesh != VK_NULL_HANDLE) {
+        vkDestroyPipeline(context.device, pipeline.skinned_mesh, nullptr);
+        pipeline.skinned_mesh = VK_NULL_HANDLE;
     }
     if (pipeline.triangle_layout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(context.device, pipeline.triangle_layout, nullptr);

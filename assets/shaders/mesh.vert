@@ -16,6 +16,7 @@ layout(push_constant) uniform PushConstants {
     mat4 model;
     vec4 base_color;
     vec4 metallic_roughness;
+    uvec4 skin;
 } pc;
 
 layout(location = 0) in vec3 a_position;
@@ -31,7 +32,7 @@ void main() {
     gl_Position = u_frame.view_projection * world;
     v_world_position = world.xyz;
     // Uniform-scale assumption holds for current content; a proper normal
-    // matrix ships with skinning in Week 7.
+    // matrix is only required by the separate skinned-mesh path.
     v_world_normal = mat3(pc.model) * a_normal;
     v_uv = a_uv;
 }

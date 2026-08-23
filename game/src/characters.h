@@ -1,19 +1,17 @@
 // game/src/characters.h
 //
-// Week 6 character import: loads a rigged GLB through the validated
-// skinned glTF path (skeleton + inverse binds + clips), logs the import
-// summary, and converts the bind pose into a static mesh so the character
-// stands in the scene until GPU skinning lands in Week 7.
+// Character asset helpers: load a rigged GLB and its bounded animation-event
+// sidecar relative to the executable, independent of the process cwd.
 
 #pragma once
 
 #include "hue/asset/mesh_data.h"
+#include "hue/anim/animation.h"
 #include "hue/core/result.h"
 
 // Loads `assets/models/<file_name>` relative to the executable.
 [[nodiscard]] hue::Result<hue::asset::SkinnedMeshData> load_character(const char* file_name);
 
-// Consumes the skinned data (textures/materials move over) and returns a
-// drawable bind-pose preview.
-[[nodiscard]] hue::Result<hue::asset::StaticMeshData>
-bind_pose_preview(hue::asset::SkinnedMeshData&& skinned);
+// Loads `assets/models/<file_name>` through the bounded Week 7 JSON parser.
+[[nodiscard]] hue::Result<hue::anim::AnimationEventTrack>
+load_character_events(const char* file_name);

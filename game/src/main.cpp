@@ -23,6 +23,7 @@
 #include "hue/core/trace.h"
 #include "hue/core/version.h"
 #include "hue/core/window.h"
+#include "hue/anim/animation.h"
 #include "hue/render/camera.h"
 #include "hue/render/renderer.h"
 
@@ -32,6 +33,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <optional>
+#include <utility>
 
 namespace {
 
@@ -230,6 +233,85 @@ void run_job_benchmark(hue::JobSystem& jobs) {
                  kBenchIterations, serial_ms, parallel_ms, speedup, jobs.worker_count());
 }
 
+class AnimatedCharacter {
+public:
+    AnimatedCharacter(hue::asset::SkinnedMeshData&& data,
+                      hue::anim::AnimationEventTrack&& events, hue::MeshHandle mesh,
+                      std::uint32_t draw_index, float first_attack_delay)
+        : m_data(std::move(data)), m_events(std::move(events)), m_mesh(mesh),
+          m_draw_index(draw_index), m_attack_countdown(first_attack_delay) {}
+
+    AnimatedCharacter(const AnimatedCharacter&) = delete;
+    AnimatedCharacter& operator=(const AnimatedCharacter&) = delete;
+
+    [[nodiscard]] hue::Result<void> initialize() {
+        const auto valid = hue::anim::validate_animation_events(m_data, m_events);
+        if (!valid) return valid.error();
+        const std::int32_t locomotion = hue::anim::find_clip(m_data, "locomotion");
+        const std::int32_t attack = hue::anim::find_clip(m_data, "attack");
+        if (locomotion < 0 || attack < 0) return hue::ErrorCode::kCorruptData;
+        m_locomotion_clip = static_cast<std::uint32_t>(locomotion);
+        m_attack_clip = static_cast<std::uint32_t>(attack);
+        return m_animator.bind(m_data, m_locomotion_clip);
+    }
+
+    void request_attack() noexcept { m_attack_requested = true; }
+
+    [[nodiscard]] hue::Result<void> update(float delta_seconds, hue::LinearArena& arena,
+                                           hue::MeshDraw* draws) {
+        if (m_animator.finished()) {
+            const auto played = m_animator.play(m_locomotion_clip, 0.12f, true);
+            if (!played) return played.error();
+        }
+        m_attack_countdown -= delta_seconds;
+        if ((m_attack_requested || m_attack_countdown <= 0.0f) &&
+            m_animator.current_clip() == m_locomotion_clip) {
+            const auto played = m_animator.play(m_attack_clip, 0.12f, false);
+            if (!played) return played.error();
+            m_attack_requested = false;
+            m_attack_countdown = 2.5f;
+        }
+
+        const hue::anim::AnimationEvent* fired[16]{};
+        auto frame = m_animator.update(delta_seconds, arena, &m_events, fired, 16);
+        if (!frame) return frame.error();
+        for (std::uint32_t i = 0; i < frame.value().fired_event_count; ++i) {
+            apply_event(*fired[i]);
+        }
+        draws[m_draw_index].mesh = m_mesh;
+        draws[m_draw_index].joint_matrices = frame.value().skinning_matrices;
+        draws[m_draw_index].joint_count = frame.value().joint_count;
+        return {};
+    }
+
+private:
+    void apply_event(const hue::anim::AnimationEvent& event) noexcept {
+        if (std::strcmp(event.name, "hit_begin") == 0) m_hitbox_active = true;
+        else if (std::strcmp(event.name, "hit_end") == 0) m_hitbox_active = false;
+        else if (std::strcmp(event.name, "cancel_open") == 0) m_cancel_open = true;
+        else if (std::strcmp(event.name, "cancel_close") == 0) m_cancel_open = false;
+        else if (std::strcmp(event.name, "iframe_begin") == 0) m_invulnerable = true;
+        else if (std::strcmp(event.name, "iframe_end") == 0) m_invulnerable = false;
+        HUE_LOG_DEBUG("anim event %s/%.3f: %s (hitbox=%d cancel=%d iframe=%d)", event.clip,
+                      static_cast<double>(event.time), event.name,
+                      m_hitbox_active ? 1 : 0, m_cancel_open ? 1 : 0,
+                      m_invulnerable ? 1 : 0);
+    }
+
+    hue::asset::SkinnedMeshData m_data;
+    hue::anim::AnimationEventTrack m_events;
+    hue::anim::Animator m_animator;
+    hue::MeshHandle m_mesh;
+    std::uint32_t m_draw_index = 0;
+    std::uint32_t m_locomotion_clip = 0;
+    std::uint32_t m_attack_clip = 0;
+    float m_attack_countdown = 0.0f;
+    bool m_attack_requested = false;
+    bool m_hitbox_active = false;
+    bool m_cancel_open = true;
+    bool m_invulnerable = false;
+};
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -284,12 +366,9 @@ int main(int argc, char** argv) {
     }
     bool renderer_active = renderer.has_value();
 
-    // Week 5/6 test content: procedural ground scene (checker texture +
-    // PBR materials), a cube through the validated glTF path, and the two
-    // rigged characters imported with skeleton + clips (drawn in bind pose
-    // until GPU skinning lands in Week 7). Failures degrade to an emptier
-    // scene rather than aborting the run.
+    // Renderer/assets scene plus two live Week 7 GPU-skinned characters.
     hue::MeshDraw draws[4];
+    std::optional<AnimatedCharacter> animated_characters[2];
     std::uint32_t draw_count = 0;
     if (renderer_active) {
         auto ground = build_ground_scene();
@@ -319,30 +398,48 @@ int main(int argc, char** argv) {
 
         const struct {
             const char* file;
+            const char* events;
             hue::Vec3 position;
             float facing_degrees;
+            float first_attack_delay;
         } characters[2] = {
-            {"player.glb", {-1.5f, 0.0f, 3.0f}, 160.0f},
-            {"enemy.glb", {1.5f, 0.0f, 3.0f}, 200.0f},
+            {"player.glb", "player.events.json", {-1.5f, 0.0f, 3.0f}, 160.0f, 1.4f},
+            {"enemy.glb", "enemy.events.json", {1.5f, 0.0f, 3.0f}, 200.0f, 2.0f},
         };
-        for (const auto& character : characters) {
+        for (std::uint32_t character_index = 0; character_index < 2; ++character_index) {
+            const auto& character = characters[character_index];
             auto skinned = load_character(character.file);
             if (!skinned) {
                 continue; // already logged; scene continues without them
             }
-            auto preview = bind_pose_preview(std::move(skinned.value()));
-            if (!preview) {
+            auto events = load_character_events(character.events);
+            if (!events) {
                 continue;
             }
-            const auto uploaded = renderer.value().upload_static_mesh(preview.value());
+            const auto valid_events =
+                hue::anim::validate_animation_events(skinned.value(), events.value());
+            if (!valid_events) {
+                HUE_LOG_WARN("animation events do not match %s", character.file);
+                continue;
+            }
+            const auto uploaded = renderer.value().upload_skinned_mesh(skinned.value());
             if (uploaded) {
-                draws[draw_count].mesh = uploaded.value();
+                const std::uint32_t character_draw = draw_count;
+                draws[character_draw].mesh = uploaded.value();
                 draws[draw_count].transform = hue::Mat4::trs(
                     character.position,
                     hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
                                                hue::radians(character.facing_degrees)),
                     {1.0f, 1.0f, 1.0f});
                 ++draw_count;
+                animated_characters[character_index].emplace(
+                    std::move(skinned.value()), std::move(events.value()), uploaded.value(),
+                    character_draw, character.first_attack_delay);
+                const auto initialized = animated_characters[character_index]->initialize();
+                if (!initialized) {
+                    HUE_LOG_ERROR("animation runtime init failed for %s", character.file);
+                    return 1;
+                }
             }
         }
 
@@ -369,6 +466,13 @@ int main(int argc, char** argv) {
     }
     HUE_LOG_INFO("job system: %u workers", jobs.value().worker_count());
     run_job_benchmark(jobs.value());
+
+    auto animation_arena =
+        hue::LinearArena::create(256 * 1024, hue::MemoryTag::kAnimation);
+    if (!animation_arena) {
+        HUE_LOG_ERROR("animation frame arena init failed");
+        return 1;
+    }
 
 #if defined(HUE_DEBUG_CHANNEL)
     GameDebugContext debug_context;
@@ -420,6 +524,7 @@ int main(int argc, char** argv) {
     while (!window.value().should_close()) {
         HUE_PROFILE_ZONE("game::frame");
         hue::memory_begin_frame();
+        animation_arena.value().reset();
         window.value().poll_events();
         input.update(window.value());
 
@@ -436,8 +541,21 @@ int main(int argc, char** argv) {
 
         const double frame_seconds = clock.tick();
         const int steps = timestep.advance(frame_seconds);
+        if (input.key_pressed(hue::key::kSpace) && animated_characters[0]) {
+            animated_characters[0]->request_attack();
+        }
         for (int s = 0; s < steps; ++s) {
             log_input_edges(input); // stand-in for the sim tick
+            for (auto& character : animated_characters) {
+                if (!character) continue;
+                const auto animated = character->update(
+                    static_cast<float>(hue::FixedTimestep::kTickSeconds),
+                    animation_arena.value(), draws);
+                if (!animated) {
+                    HUE_LOG_ERROR("animation update failed");
+                    return 1;
+                }
+            }
         }
 
         if (renderer_active) {

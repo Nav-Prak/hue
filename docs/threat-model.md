@@ -28,7 +28,8 @@ remote code execution via gameplay netcode.
 | glTF / GLB meshes | `hue::asset::load_gltf` | **Week 5** — validated, fuzzed |
 | SPIR-V shaders (reload) | `hue::validate_spirv_bytes` | Week 4 boundary check; full reflection hardening in Week 14 |
 | Textures / images (PNG/JPEG) | `load_gltf` / `load_gltf_skinned` | **Week 6** — decoded via stb_image behind caps, fuzzed |
-| Skinned / animated glTF | `hue::asset::load_gltf_skinned` | **Week 6** — skeleton/clip validation, fuzzed; runtime sampling Week 7 |
+| Skinned / animated glTF | `hue::asset::load_gltf_skinned` | **Weeks 6–7** — skeleton/clip validation, fuzzed, bounded sampling + GPU palettes |
+| Animation event JSON | `hue::anim::parse_animation_events` | **Week 7** — 64 KiB/256-event caps, strict schema, clip/time validation |
 | Scene JSON | (not yet) | Week 12 |
 | Combat tuning JSON | (not yet) | Week 14 |
 
@@ -111,6 +112,12 @@ Defenses:
    `kGltfMaxKeyframes`; output counts must match input counts; LINEAR
    interpolation only; rotation keys must not be zero-length (they get
    normalized at sampling time).
+5. **Runtime revalidation** — clip time and blend parameters are finite and
+   clamped; channel targets and topological parent order are checked before
+   pose propagation; renderer uploads require an exact joint-count match.
+6. **Bounded event sidecars** — parser accepts only the `events` schema,
+   caps file/event/string sizes, rejects non-finite or negative times, then
+   verifies every event against a real clip and its duration.
 
 ## Local debug surfaces
 
@@ -124,7 +131,6 @@ as untrusted text (bounded buffers, no `std::string` growth from input).
 
 ## Deferred
 
-- Animation runtime hardening (sampling clamps, blend weight validation) — Week 7
 - Scene description JSON (capped counts, validated references) + dedicated
   fuzz harness — Week 12
 - Shader hot-reload reflection validation + fuzz — Week 14

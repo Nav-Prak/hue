@@ -12,6 +12,7 @@
 #include <vk_mem_alloc.h>
 
 #include "hue/asset/mesh_data.h"
+#include "hue/asset/gltf_loader.h"
 #include "hue/core/log.h"
 #include "hue/core/result.h"
 #include "hue/render/mesh.h"
@@ -38,6 +39,7 @@ inline constexpr std::uint32_t kMaxSwapchainImages = 8;
 inline constexpr std::uint32_t kMaxMeshes = 256;
 inline constexpr std::uint32_t kMaxMaterialSets = 1024;
 inline constexpr std::uint32_t kMaxSamplers = 8;
+inline constexpr std::uint32_t kMaxSkinnedDraws = 64;
 
 struct ContextState {
     VkInstance instance = VK_NULL_HANDLE;
@@ -75,6 +77,7 @@ struct PipelineState {
     // Static meshes: vertex input + depth test + 128B push constants.
     VkPipelineLayout mesh_layout = VK_NULL_HANDLE;
     VkPipeline mesh = VK_NULL_HANDLE;
+    VkPipeline skinned_mesh = VK_NULL_HANDLE;
 };
 
 struct BufferAllocation {
@@ -122,10 +125,14 @@ struct FrameUniforms {
 struct DescriptorState {
     VkDescriptorSetLayout frame_layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout material_layout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout skin_layout = VK_NULL_HANDLE;
     VkDescriptorPool pool = VK_NULL_HANDLE;
     BufferAllocation frame_ubos[kFramesInFlight];
     void* frame_ubo_mapped[kFramesInFlight] = {};
     VkDescriptorSet frame_sets[kFramesInFlight] = {};
+    BufferAllocation skin_buffers[kFramesInFlight];
+    void* skin_buffer_mapped[kFramesInFlight] = {};
+    VkDescriptorSet skin_sets[kFramesInFlight] = {};
 };
 
 // GPU-side material: factors pushed per draw, textures bound via set 1.
@@ -146,7 +153,9 @@ struct GpuMesh {
     Array<GpuTexture> textures{MemoryTag::kRender};
     Array<GpuMaterial> materials{MemoryTag::kRender};
     Aabb bounds;
+    std::uint32_t joint_count = 0;
     std::uint32_t generation = 0;
+    bool skinned = false;
     bool used = false;
 };
 
@@ -161,8 +170,10 @@ struct MeshPushConstants {
     Mat4 model;              // 64B
     Vec4 base_color;         // 16B
     Vec4 metallic_roughness; // x = metallic, y = roughness, zw unused
+    std::uint32_t skin_offset = 0; // index of the draw's first joint matrix
+    std::uint32_t padding[3] = {};
 };
-static_assert(sizeof(MeshPushConstants) == 96);
+static_assert(sizeof(MeshPushConstants) == 112);
 
 // context.cpp
 Result<void> context_create(ContextState& context, GLFWwindow* window, bool enable_validation);
@@ -212,6 +223,10 @@ Result<MeshHandle> mesh_registry_upload(MeshRegistry& registry, const ContextSta
                                         VkImageView fallback_base_color,
                                         VkImageView fallback_metallic_roughness,
                                         const asset::StaticMeshData& data);
+Result<MeshHandle> mesh_registry_upload_skinned(
+    MeshRegistry& registry, const ContextState& context, DescriptorState& descriptors,
+    SamplerCache& samplers, VkImageView fallback_base_color,
+    VkImageView fallback_metallic_roughness, const asset::SkinnedMeshData& data);
 const GpuMesh* mesh_registry_resolve(const MeshRegistry& registry, MeshHandle handle);
 void mesh_registry_destroy(MeshRegistry& registry, const ContextState& context);
 
