@@ -394,10 +394,41 @@ def clip_channels(name: str):
              [(0.0, axis_angle(x, 0.0)), (0.6, axis_angle(x, -0.3)),
               (1.2, axis_angle(x, -0.6))]),
         ]
+    if name == "idle":
+        # Subtle breathing sway; long period so the loop reads as standing.
+        period = 2.0
+        return [
+            (J["hips"], "translation",
+             [(period * k / 8, (0.0, 0.95 + 0.008 * math.sin(2 * math.pi * k / 8), 0.0))
+              for k in range(9)]),
+            (J["chest"], "rotation", swing(x, 0.03, period)),
+            (J["head"], "rotation", swing(y, 0.04, period, half_pi)),
+            (J["upper_arm_l"], "rotation", swing(x, 0.02, period)),
+            (J["upper_arm_r"], "rotation", swing(x, 0.02, period, math.pi)),
+        ]
+    if name == "walk":
+        # Same 0.8s period as locomotion (the run) so the Week 8 1D speed
+        # blend can share one normalized phase between the two gaits.
+        period = 0.8
+        return [
+            (J["hips"], "translation",
+             [(period * k / 8,
+               (0.0, 0.95 + 0.015 * abs(math.sin(2 * math.pi * k / 8)), 0.0))
+              for k in range(9)]),
+            (J["thigh_l"], "rotation", swing(x, 0.35, period)),
+            (J["thigh_r"], "rotation", swing(x, 0.35, period, math.pi)),
+            (J["shin_l"], "rotation", swing(x, 0.22, period, half_pi)),
+            (J["shin_r"], "rotation", swing(x, 0.22, period, math.pi + half_pi)),
+            (J["upper_arm_l"], "rotation", swing(x, 0.18, period, math.pi)),
+            (J["upper_arm_r"], "rotation", swing(x, 0.18, period)),
+            (J["forearm_l"], "rotation", swing(x, 0.08, period, math.pi + half_pi)),
+            (J["forearm_r"], "rotation", swing(x, 0.08, period, half_pi)),
+            (J["chest"], "rotation", swing(y, 0.05, period)),
+        ]
     raise ValueError(name)
 
 
-CLIPS = ["locomotion", "attack", "dodge", "hit_react", "death"]
+CLIPS = ["locomotion", "attack", "dodge", "hit_react", "death", "idle", "walk"]
 
 
 def build_character(base: tuple, accent: tuple, metallic: float, roughness: float) -> bytes:

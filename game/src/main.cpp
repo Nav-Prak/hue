@@ -11,6 +11,7 @@
 
 #include "characters.h"
 #include "fly_camera.h"
+#include "follow_camera.h"
 #include "test_meshes.h"
 
 #include "hue/core/debug_channel.h"
@@ -19,15 +20,19 @@
 #include "hue/core/log.h"
 #include "hue/core/math.h"
 #include "hue/core/memory.h"
+#include "hue/core/spring.h"
 #include "hue/core/time.h"
 #include "hue/core/trace.h"
 #include "hue/core/version.h"
 #include "hue/core/window.h"
 #include "hue/anim/animation.h"
+#include "hue/ecs/ecs.h"
+#include "hue/physics/physics.h"
 #include "hue/render/camera.h"
 #include "hue/render/renderer.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -233,13 +238,20 @@ void run_job_benchmark(hue::JobSystem& jobs) {
                  kBenchIterations, serial_ms, parallel_ms, speedup, jobs.worker_count());
 }
 
+// Movement tuning shared by the controller and the animation blend, so the
+// blend parameter is literally the character's ground speed.
+constexpr float kWalkSpeed = 1.6f;  // m/s, matches the walk gait
+constexpr float kRunSpeed = 4.0f;   // m/s, matches the locomotion (run) gait
+constexpr float kIdleThreshold = 0.2f;
+
 class AnimatedCharacter {
 public:
     AnimatedCharacter(hue::asset::SkinnedMeshData&& data,
                       hue::anim::AnimationEventTrack&& events, hue::MeshHandle mesh,
-                      std::uint32_t draw_index, float first_attack_delay)
+                      std::uint32_t draw_index, bool auto_attack, float first_attack_delay)
         : m_data(std::move(data)), m_events(std::move(events)), m_mesh(mesh),
-          m_draw_index(draw_index), m_attack_countdown(first_attack_delay) {}
+          m_draw_index(draw_index), m_attack_countdown(first_attack_delay),
+          m_auto_attack(auto_attack) {}
 
     AnimatedCharacter(const AnimatedCharacter&) = delete;
     AnimatedCharacter& operator=(const AnimatedCharacter&) = delete;
@@ -247,29 +259,51 @@ public:
     [[nodiscard]] hue::Result<void> initialize() {
         const auto valid = hue::anim::validate_animation_events(m_data, m_events);
         if (!valid) return valid.error();
-        const std::int32_t locomotion = hue::anim::find_clip(m_data, "locomotion");
+        const std::int32_t run = hue::anim::find_clip(m_data, "locomotion");
+        const std::int32_t walk = hue::anim::find_clip(m_data, "walk");
+        const std::int32_t idle = hue::anim::find_clip(m_data, "idle");
         const std::int32_t attack = hue::anim::find_clip(m_data, "attack");
-        if (locomotion < 0 || attack < 0) return hue::ErrorCode::kCorruptData;
-        m_locomotion_clip = static_cast<std::uint32_t>(locomotion);
+        if (run < 0 || walk < 0 || idle < 0 || attack < 0) return hue::ErrorCode::kCorruptData;
+        m_run_clip = static_cast<std::uint32_t>(run);
+        m_walk_clip = static_cast<std::uint32_t>(walk);
+        m_idle_clip = static_cast<std::uint32_t>(idle);
         m_attack_clip = static_cast<std::uint32_t>(attack);
-        return m_animator.bind(m_data, m_locomotion_clip);
+        return m_animator.bind(m_data, m_idle_clip);
     }
 
     void request_attack() noexcept { m_attack_requested = true; }
 
+    // Ground speed for the 1D locomotion blend (walk at 1.6, run at 4.0).
+    void set_locomotion_speed(float speed) noexcept { m_speed = speed; }
+
+    [[nodiscard]] bool attacking() const noexcept {
+        return !m_animator.blending() && m_animator.current_clip() == m_attack_clip &&
+               !m_animator.finished();
+    }
+
     [[nodiscard]] hue::Result<void> update(float delta_seconds, hue::LinearArena& arena,
                                            hue::MeshDraw* draws) {
-        if (m_animator.finished()) {
-            const auto played = m_animator.play(m_locomotion_clip, 0.12f, true);
-            if (!played) return played.error();
-        }
         m_attack_countdown -= delta_seconds;
-        if ((m_attack_requested || m_attack_countdown <= 0.0f) &&
-            m_animator.current_clip() == m_locomotion_clip) {
+        if ((m_attack_requested || (m_auto_attack && m_attack_countdown <= 0.0f)) &&
+            !attacking()) {
             const auto played = m_animator.play(m_attack_clip, 0.12f, false);
             if (!played) return played.error();
             m_attack_requested = false;
             m_attack_countdown = 2.5f;
+        }
+
+        if (!attacking()) {
+            // Locomotion layer: idle when standing, walk/run 1D blend by
+            // actual ground speed while moving.
+            if (m_speed < kIdleThreshold) {
+                const auto played = m_animator.play(m_idle_clip, 0.2f, true);
+                if (!played) return played.error();
+            } else {
+                const auto played =
+                    m_animator.play_blend(m_walk_clip, m_run_clip, kWalkSpeed, kRunSpeed, 0.15f);
+                if (!played) return played.error();
+                m_animator.set_blend_parameter(m_speed);
+            }
         }
 
         const hue::anim::AnimationEvent* fired[16]{};
@@ -303,14 +337,118 @@ private:
     hue::anim::Animator m_animator;
     hue::MeshHandle m_mesh;
     std::uint32_t m_draw_index = 0;
-    std::uint32_t m_locomotion_clip = 0;
+    std::uint32_t m_run_clip = 0;
+    std::uint32_t m_walk_clip = 0;
+    std::uint32_t m_idle_clip = 0;
     std::uint32_t m_attack_clip = 0;
     float m_attack_countdown = 0.0f;
+    float m_speed = 0.0f;
+    bool m_auto_attack = false;
     bool m_attack_requested = false;
     bool m_hitbox_active = false;
     bool m_cancel_open = true;
     bool m_invulnerable = false;
 };
+
+// ------------------------------------------------------------- ECS pieces
+
+// Week 8 components: enough to route physics -> transforms -> draws through
+// the ECS instead of ad-hoc locals. Combat components arrive in Week 9/10.
+struct TransformComponent {
+    hue::Vec3 position{};
+    float yaw = 0.0f; // radians around +Y
+};
+
+struct DrawComponent {
+    std::uint32_t index = 0; // slot in the frame's MeshDraw array
+};
+
+struct BodyComponent {
+    std::uint32_t character = 0; // PhysicsWorld character id
+};
+
+// Bakes a static render mesh (procedural scene or validated glTF import)
+// into one world-space triangle soup and cooks it into a Jolt mesh body.
+// Collision therefore comes from the same data the renderer draws - no
+// hand-maintained box duplicates.
+[[nodiscard]] hue::Result<void>
+cook_static_collision(const hue::asset::StaticMeshData& data, const hue::Mat4& world_transform,
+                      hue::physics::PhysicsWorld& physics) {
+    hue::Array<hue::Vec3> positions{hue::MemoryTag::kPhysics};
+    hue::Array<std::uint32_t> indices{hue::MemoryTag::kPhysics};
+
+    for (std::size_t i = 0; i < data.instances.size(); ++i) {
+        const hue::asset::MeshInstance& instance = data.instances[i];
+        if (instance.primitive_index >= data.primitives.size()) {
+            return hue::ErrorCode::kCorruptData;
+        }
+        const hue::asset::MeshPrimitive& primitive = data.primitives[instance.primitive_index];
+        const hue::Mat4 world = world_transform * instance.transform;
+        for (std::uint32_t index = 0; index < primitive.index_count; ++index) {
+            const std::uint32_t raw = data.indices[primitive.first_index + index];
+            const std::int64_t vertex =
+                static_cast<std::int64_t>(raw) + primitive.vertex_offset;
+            if (vertex < 0 || vertex >= static_cast<std::int64_t>(data.vertices.size())) {
+                return hue::ErrorCode::kCorruptData;
+            }
+            const hue::Vec3 position = world.transform_point(
+                data.vertices[static_cast<std::size_t>(vertex)].position);
+            if (!indices.push_back(static_cast<std::uint32_t>(positions.size())) ||
+                !positions.push_back(position)) {
+                return hue::ErrorCode::kOutOfMemory;
+            }
+        }
+    }
+    if (positions.empty()) {
+        return hue::ErrorCode::kInvalidArgument;
+    }
+    return physics.add_static_mesh(positions.data(), positions.size(), indices.data(),
+                                   indices.size());
+}
+
+[[nodiscard]] float wrap_angle(float radians_in) noexcept {
+    while (radians_in > hue::kPi) radians_in -= hue::kTwoPi;
+    while (radians_in < -hue::kPi) radians_in += hue::kTwoPi;
+    return radians_in;
+}
+
+// WASD (or left stick) relative to the camera yaw. Keyboard: shift runs.
+// Gamepad: stick deflection is analog - direction from the angle, walk-to-
+// run speed from the magnitude.
+[[nodiscard]] hue::Vec3 movement_input(const hue::Input& input, float camera_yaw) {
+    using namespace hue;
+    constexpr float kStickDeadzone = 0.2f;
+
+    float forward_axis = 0.0f;
+    float right_axis = 0.0f;
+    if (input.key_down(key::kW)) forward_axis += 1.0f;
+    if (input.key_down(key::kS)) forward_axis -= 1.0f;
+    if (input.key_down(key::kD)) right_axis += 1.0f;
+    if (input.key_down(key::kA)) right_axis -= 1.0f;
+    float speed = input.key_down(key::kLeftShift) ? kRunSpeed : kWalkSpeed;
+
+    const GamepadState& pad = input.gamepad();
+    if (pad.connected) {
+        const float lx = pad.axes[pad::kAxisLeftX];
+        const float ly = pad.axes[pad::kAxisLeftY];
+        const float magnitude = std::sqrt(lx * lx + ly * ly);
+        if (magnitude > kStickDeadzone) {
+            right_axis = lx;
+            forward_axis = -ly;
+            // Rescale the post-deadzone range so a light tilt walks and a
+            // full deflection runs.
+            const float deflection =
+                clamp((magnitude - kStickDeadzone) / (1.0f - kStickDeadzone), 0.0f, 1.0f);
+            speed = lerp(kWalkSpeed, kRunSpeed, deflection);
+        }
+    }
+    if (forward_axis == 0.0f && right_axis == 0.0f) return {};
+
+    const Vec3 forward{-std::sin(camera_yaw), 0.0f, -std::cos(camera_yaw)};
+    const Vec3 right{std::cos(camera_yaw), 0.0f, -std::sin(camera_yaw)};
+    const Vec3 direction = forward * forward_axis + right * right_axis;
+    return normalize(direction) * speed;
+}
 
 } // namespace
 
@@ -366,12 +504,47 @@ int main(int argc, char** argv) {
     }
     bool renderer_active = renderer.has_value();
 
+    // --- Week 8: physics world; collision cooks from the render meshes ---
+    auto physics = hue::physics::PhysicsWorld::create();
+    if (!physics) {
+        HUE_LOG_ERROR("physics world init failed");
+        return 1;
+    }
+
+    // Scene mesh data builds regardless of the renderer so headless runs
+    // still get a physics arena; GPU uploads stay renderer-gated below.
+    const hue::Mat4 cube_world = hue::Mat4::trs(
+        {0.0f, 3.75f, 0.0f},
+        hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f}, hue::radians(30.0f)),
+        {1.5f, 1.5f, 1.5f});
+    auto ground = build_ground_scene();
+    auto gltf_cube = build_gltf_cube();
+    if (!gltf_cube) {
+        HUE_LOG_ERROR("glTF cube import failed; scene continues without it");
+    }
+    if (ground) {
+        const auto cooked =
+            cook_static_collision(ground.value(), hue::Mat4::identity(), physics.value());
+        if (!cooked) {
+            HUE_LOG_ERROR("arena collision cook failed");
+            return 1;
+        }
+    }
+    if (gltf_cube) {
+        const auto cooked =
+            cook_static_collision(gltf_cube.value(), cube_world, physics.value());
+        if (!cooked) {
+            HUE_LOG_ERROR("glTF cube collision cook failed");
+            return 1;
+        }
+    }
+
     // Renderer/assets scene plus two live Week 7 GPU-skinned characters.
     hue::MeshDraw draws[4];
     std::optional<AnimatedCharacter> animated_characters[2];
+    std::uint32_t character_draw_indices[2] = {UINT32_MAX, UINT32_MAX};
     std::uint32_t draw_count = 0;
     if (renderer_active) {
-        auto ground = build_ground_scene();
         if (ground) {
             const auto uploaded = renderer.value().upload_static_mesh(ground.value());
             if (uploaded) {
@@ -380,20 +553,13 @@ int main(int argc, char** argv) {
                 ++draw_count;
             }
         }
-        auto gltf_cube = build_gltf_cube();
         if (gltf_cube) {
             const auto uploaded = renderer.value().upload_static_mesh(gltf_cube.value());
             if (uploaded) {
                 draws[draw_count].mesh = uploaded.value();
-                draws[draw_count].transform =
-                    hue::Mat4::trs({0.0f, 3.75f, 0.0f},
-                                   hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
-                                                              hue::radians(30.0f)),
-                                   {1.5f, 1.5f, 1.5f});
+                draws[draw_count].transform = cube_world;
                 ++draw_count;
             }
-        } else {
-            HUE_LOG_ERROR("glTF cube import failed; scene continues without it");
         }
 
         const struct {
@@ -401,10 +567,11 @@ int main(int argc, char** argv) {
             const char* events;
             hue::Vec3 position;
             float facing_degrees;
+            bool auto_attack;
             float first_attack_delay;
         } characters[2] = {
-            {"player.glb", "player.events.json", {-1.5f, 0.0f, 3.0f}, 160.0f, 1.4f},
-            {"enemy.glb", "enemy.events.json", {1.5f, 0.0f, 3.0f}, 200.0f, 2.0f},
+            {"player.glb", "player.events.json", {-1.5f, 0.0f, 3.0f}, 160.0f, false, 0.0f},
+            {"enemy.glb", "enemy.events.json", {1.5f, 0.0f, 3.0f}, 200.0f, true, 2.0f},
         };
         for (std::uint32_t character_index = 0; character_index < 2; ++character_index) {
             const auto& character = characters[character_index];
@@ -432,9 +599,10 @@ int main(int argc, char** argv) {
                                                hue::radians(character.facing_degrees)),
                     {1.0f, 1.0f, 1.0f});
                 ++draw_count;
+                character_draw_indices[character_index] = character_draw;
                 animated_characters[character_index].emplace(
                     std::move(skinned.value()), std::move(events.value()), uploaded.value(),
-                    character_draw, character.first_attack_delay);
+                    character_draw, character.auto_attack, character.first_attack_delay);
                 const auto initialized = animated_characters[character_index]->initialize();
                 if (!initialized) {
                     HUE_LOG_ERROR("animation runtime init failed for %s", character.file);
@@ -452,12 +620,77 @@ int main(int argc, char** argv) {
         renderer.value().set_point_lights(point_lights, 2);
 
         if (draw_count > 0) {
-            HUE_LOG_INFO("scene ready: %u meshes, 2 point lights (fly: RMB look, WASD move, "
-                         "Q/E down/up, shift fast)",
+            HUE_LOG_INFO("scene ready: %u meshes, 2 point lights (RMB orbit, WASD move, "
+                         "shift run, Space attack, F1 debug fly cam)",
                          draw_count);
         }
     }
     FlyCamera fly_camera;
+    FollowCamera follow_camera;
+    bool use_fly_camera = false;
+
+    // --- Week 8: capsule controllers + ECS world --------------------------
+
+    hue::physics::CharacterDesc player_capsule;
+    player_capsule.position = {-1.5f, 0.05f, 3.0f};
+    const auto player_body = physics.value().create_character(player_capsule);
+    if (!player_body) {
+        HUE_LOG_ERROR("player capsule controller creation failed");
+        return 1;
+    }
+    // The enemy stands on its own capsule (grounded by the same solver);
+    // it only starts steering itself when AI lands in Week 11.
+    hue::physics::CharacterDesc enemy_capsule;
+    enemy_capsule.position = {1.5f, 0.05f, 3.0f};
+    const auto enemy_body = physics.value().create_character(enemy_capsule);
+    if (!enemy_body) {
+        HUE_LOG_ERROR("enemy capsule controller creation failed");
+        return 1;
+    }
+    HUE_LOG_INFO("physics arena: %u static bodies (cooked from render meshes), "
+                 "%u capsule controllers",
+                 physics.value().static_body_count(), physics.value().character_count());
+
+    hue::ecs::World world;
+    auto transform_pool = world.pool<TransformComponent>();
+    auto draw_pool = world.pool<DrawComponent>();
+    auto body_pool = world.pool<BodyComponent>();
+    if (!transform_pool || !draw_pool || !body_pool) {
+        HUE_LOG_ERROR("ecs pool init failed");
+        return 1;
+    }
+    {
+        const auto player_entity = world.create();
+        const auto enemy_entity = world.create();
+        if (!player_entity || !enemy_entity) {
+            HUE_LOG_ERROR("ecs entity creation failed");
+            return 1;
+        }
+        bool ok =
+            world.add(player_entity.value(),
+                      TransformComponent{{-1.5f, 0.0f, 3.0f}, hue::radians(160.0f)})
+                .has_value();
+        ok = ok && world.add(player_entity.value(), BodyComponent{player_body.value()})
+                       .has_value();
+        ok = ok && world.add(enemy_entity.value(),
+                             TransformComponent{{1.5f, 0.0f, 3.0f}, hue::radians(200.0f)})
+                       .has_value();
+        ok = ok && world.add(enemy_entity.value(), BodyComponent{enemy_body.value()})
+                       .has_value();
+        if (ok && character_draw_indices[0] != UINT32_MAX) {
+            ok = world.add(player_entity.value(), DrawComponent{character_draw_indices[0]})
+                     .has_value();
+        }
+        if (ok && character_draw_indices[1] != UINT32_MAX) {
+            ok = world.add(enemy_entity.value(), DrawComponent{character_draw_indices[1]})
+                     .has_value();
+        }
+        if (!ok) {
+            HUE_LOG_ERROR("ecs component setup failed");
+            return 1;
+        }
+    }
+    HUE_LOG_INFO("ecs world: %zu entities", world.alive_count());
 
     auto jobs = hue::JobSystem::create();
     if (!jobs) {
@@ -538,6 +771,10 @@ int main(int argc, char** argv) {
         }
         if (input.key_pressed(hue::key::kEscape))
             break;
+        if (input.key_pressed(hue::key::kF1)) {
+            use_fly_camera = !use_fly_camera;
+            HUE_LOG_INFO("camera: %s", use_fly_camera ? "debug fly" : "third-person follow");
+        }
 
         const double frame_seconds = clock.tick();
         const int steps = timestep.advance(frame_seconds);
@@ -545,29 +782,83 @@ int main(int argc, char** argv) {
             animated_characters[0]->request_attack();
         }
         for (int s = 0; s < steps; ++s) {
-            log_input_edges(input); // stand-in for the sim tick
+            constexpr float kTick = static_cast<float>(hue::FixedTimestep::kTickSeconds);
+            log_input_edges(input); // input edges logged per sim tick
+
+            // Player movement: camera-relative WASD/stick through the
+            // capsule controller; the solver output drives the anim blend.
+            const hue::Vec3 desired = movement_input(input, follow_camera.yaw());
+            physics.value().set_character_velocity(player_body.value(), desired);
+            const auto stepped = physics.value().update(kTick);
+            if (!stepped) {
+                HUE_LOG_ERROR("physics update failed");
+                return 1;
+            }
+
+            // Physics -> ECS transforms (position + smoothed facing).
+            hue::ecs::for_each(
+                *body_pool.value(), *transform_pool.value(),
+                [&](hue::ecs::Entity, BodyComponent& body, TransformComponent& transform) {
+                    transform.position =
+                        physics.value().character_position(body.character);
+                    const hue::Vec3 velocity =
+                        physics.value().character_velocity(body.character);
+                    const hue::Vec3 planar{velocity.x, 0.0f, velocity.z};
+                    if (length_squared(planar) > kIdleThreshold * kIdleThreshold) {
+                        const float target_yaw = std::atan2(-planar.x, -planar.z);
+                        const float delta = wrap_angle(target_yaw - transform.yaw);
+                        transform.yaw += hue::damp(0.0f, delta, 14.0f, kTick);
+                    }
+                });
+
+            if (animated_characters[0]) {
+                const hue::Vec3 velocity =
+                    physics.value().character_velocity(player_body.value());
+                animated_characters[0]->set_locomotion_speed(
+                    length(hue::Vec3{velocity.x, 0.0f, velocity.z}));
+            }
             for (auto& character : animated_characters) {
                 if (!character) continue;
-                const auto animated = character->update(
-                    static_cast<float>(hue::FixedTimestep::kTickSeconds),
-                    animation_arena.value(), draws);
+                const auto animated =
+                    character->update(kTick, animation_arena.value(), draws);
                 if (!animated) {
                     HUE_LOG_ERROR("animation update failed");
                     return 1;
                 }
             }
+            if (const auto flushed = world.flush(); !flushed) {
+                HUE_LOG_ERROR("ecs flush failed");
+                return 1;
+            }
         }
 
         if (renderer_active) {
-            fly_camera.update(input, static_cast<float>(frame_seconds));
+            // ECS transforms -> draw list.
+            hue::ecs::for_each(
+                *draw_pool.value(), *transform_pool.value(),
+                [&](hue::ecs::Entity, DrawComponent& draw, TransformComponent& transform) {
+                    draws[draw.index].transform = hue::Mat4::trs(
+                        transform.position,
+                        hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f}, transform.yaw),
+                        {1.0f, 1.0f, 1.0f});
+                });
+
+            if (use_fly_camera) {
+                fly_camera.update(input, static_cast<float>(frame_seconds));
+            } else {
+                follow_camera.update(input, static_cast<float>(frame_seconds),
+                                     physics.value().character_position(player_body.value()),
+                                     physics.value());
+            }
             const hue::RendererStatus& render_status = renderer.value().status();
             const float aspect =
                 render_status.swapchain_height > 0
                     ? static_cast<float>(render_status.swapchain_width) /
                           static_cast<float>(render_status.swapchain_height)
                     : 16.0f / 9.0f;
-            const auto drawn =
-                renderer.value().draw_frame(fly_camera.camera(aspect), draws, draw_count);
+            const hue::Camera camera = use_fly_camera ? fly_camera.camera(aspect)
+                                                      : follow_camera.camera(aspect);
+            const auto drawn = renderer.value().draw_frame(camera, draws, draw_count);
             if (!drawn) {
                 HUE_LOG_ERROR("draw_frame failed; rendering disabled for this run");
                 renderer_active = false;

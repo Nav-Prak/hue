@@ -24,6 +24,7 @@ inline constexpr int kQ = 81;
 inline constexpr int kS = 83;
 inline constexpr int kW = 87;
 inline constexpr int kEscape = 256;
+inline constexpr int kF1 = 290;
 inline constexpr int kRight = 262;
 inline constexpr int kLeft = 263;
 inline constexpr int kDown = 264;

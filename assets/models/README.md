@@ -31,15 +31,16 @@ Everything the Week 6 spec requires the importer to handle:
 - Smooth skinning: limb-tube vertices blend between the two nearest
   joints (real multi-influence weights, u16 joints / f32 weights).
 - Embedded 64x64 PNG base color texture + metallic-roughness material.
-- Five LINEAR clips: `locomotion`, `attack`, `dodge`, `hit_react`,
-  `death` — the clip set the combat state machine consumes from Week 9.
+- Seven LINEAR clips: `locomotion` (run), `attack`, `dodge`, `hit_react`,
+  `death`, `idle`, and `walk` — the set the combat state machine consumes
+  from Week 9. `walk` shares the 0.8s period of `locomotion` so the 1D
+  speed blend can drive both gaits from a single phase.
 
 The Week 7 runtime samples these clips into frame-arena poses, crossfades
 between locomotion and one-shots, and uploads joint palettes for GPU skinning.
 The adjacent `*.events.json` files provide validated attack, cancel, hitbox,
 invulnerability, and footstep timing without modifying the GLBs.
 
-The runtime also exposes and tests a generic two-clip 1D blend primitive.
-These generated assets contain only one locomotion clip, so the live demo uses
-the documented crossfade-only fallback rather than claiming a live idle/walk/run
-blend tree. World-space character movement begins with ECS/Jolt in Week 8.
+Since Week 8 the live demo drives the walk↔run 1D blend from the capsule
+controller's solved ground speed (idle below 0.2 m/s, walk at 1.6, run at
+4.0), with the third-person follow camera orbiting the player.

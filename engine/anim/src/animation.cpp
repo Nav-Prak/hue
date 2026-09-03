@@ -367,14 +367,12 @@ Result<void> Animator::bind(const asset::SkinnedMeshData& data,
         return ErrorCode::kInvalidArgument;
     }
     m_data = &data;
-    m_current_clip = initial_clip;
-    m_previous_clip = initial_clip;
-    m_current_time = 0.0f;
-    m_previous_time = 0.0f;
+    m_current = Source{};
+    m_current.lower = initial_clip;
+    m_current.upper = initial_clip;
+    m_previous = m_current;
     m_fade_elapsed = 0.0f;
     m_fade_duration = 0.0f;
-    m_loop = true;
-    m_previous_loop = true;
     return {};
 }
 
@@ -383,16 +381,82 @@ Result<void> Animator::play(std::uint32_t clip, float fade_seconds, bool loop) n
         fade_seconds < 0.0f) {
         return ErrorCode::kInvalidArgument;
     }
-    if (clip == m_current_clip && loop == m_loop) return {};
-    m_previous_clip = m_current_clip;
-    m_previous_time = m_current_time;
-    m_previous_loop = m_loop;
-    m_current_clip = clip;
-    m_current_time = 0.0f;
-    m_loop = loop;
+    if (!m_current.blended && clip == m_current.lower && loop == m_current.loop) return {};
+    m_previous = m_current;
+    m_current = Source{};
+    m_current.lower = clip;
+    m_current.upper = clip;
+    m_current.loop = loop;
     m_fade_elapsed = 0.0f;
     m_fade_duration = fade_seconds;
     return {};
+}
+
+Result<void> Animator::play_blend(std::uint32_t lower_clip, std::uint32_t upper_clip,
+                                  float lower_position, float upper_position,
+                                  float fade_seconds) noexcept {
+    if (m_data == nullptr || lower_clip >= m_data->clips.size() ||
+        upper_clip >= m_data->clips.size() || lower_clip == upper_clip ||
+        !std::isfinite(lower_position) || !std::isfinite(upper_position) ||
+        upper_position <= lower_position || !std::isfinite(fade_seconds) ||
+        fade_seconds < 0.0f) {
+        return ErrorCode::kInvalidArgument;
+    }
+    // One shared phase drives both gaits, so their durations must agree.
+    const float lower_duration = m_data->clips[lower_clip].duration;
+    const float upper_duration = m_data->clips[upper_clip].duration;
+    if (lower_duration <= 0.0f ||
+        std::fabs(lower_duration - upper_duration) > 1.0e-4f) {
+        return ErrorCode::kInvalidArgument;
+    }
+    if (m_current.blended && m_current.lower == lower_clip && m_current.upper == upper_clip) {
+        m_current.lower_position = lower_position;
+        m_current.upper_position = upper_position;
+        return {}; // already in this blend; keep phase and parameter
+    }
+    m_previous = m_current;
+    m_current = Source{};
+    m_current.lower = lower_clip;
+    m_current.upper = upper_clip;
+    m_current.lower_position = lower_position;
+    m_current.upper_position = upper_position;
+    m_current.parameter = lower_position;
+    m_current.blended = true;
+    m_fade_elapsed = 0.0f;
+    m_fade_duration = fade_seconds;
+    return {};
+}
+
+void Animator::set_blend_parameter(float parameter) noexcept {
+    if (!m_current.blended || !std::isfinite(parameter)) return;
+    if (parameter < m_current.lower_position) parameter = m_current.lower_position;
+    if (parameter > m_current.upper_position) parameter = m_current.upper_position;
+    m_current.parameter = parameter;
+}
+
+float Animator::blend_weight(const Source& source) const noexcept {
+    if (!source.blended) return 0.0f;
+    return clamp01((source.parameter - source.lower_position) /
+                   (source.upper_position - source.lower_position));
+}
+
+std::uint32_t Animator::dominant_clip(const Source& source) const noexcept {
+    return source.blended && blend_weight(source) >= 0.5f ? source.upper : source.lower;
+}
+
+std::uint32_t Animator::current_clip() const noexcept { return dominant_clip(m_current); }
+
+Result<void> Animator::sample_source(const Source& source, LinearArena& arena,
+                                     LocalTransform* out) noexcept {
+    const std::uint32_t joint_count = static_cast<std::uint32_t>(m_data->joints.size());
+    if (source.blended) {
+        return sample_blend_1d(m_data->joints.data(), joint_count,
+                               m_data->clips[source.lower], source.time, source.lower_position,
+                               m_data->clips[source.upper], source.time, source.upper_position,
+                               source.parameter, source.loop, arena, out);
+    }
+    return sample_clip(m_data->joints.data(), joint_count, m_data->clips[source.lower],
+                       source.time, source.loop, out);
 }
 
 Result<AnimationFrame> Animator::update(float delta_seconds, LinearArena& arena,
@@ -404,20 +468,23 @@ Result<AnimationFrame> Animator::update(float delta_seconds, LinearArena& arena,
         (fired_event_capacity > 0 && fired_events == nullptr)) {
         return ErrorCode::kInvalidArgument;
     }
-    const asset::AnimationClip& clip = m_data->clips[m_current_clip];
-    const float old_time = m_current_time;
+    const asset::AnimationClip& clip = m_data->clips[m_current.lower];
+    const float old_time = m_current.time;
     const float advanced = old_time + delta_seconds;
     bool wrapped = false;
-    if (m_loop && clip.duration > 0.0f && advanced >= clip.duration) wrapped = true;
-    m_current_time = clip_time(advanced, clip.duration, m_loop);
-    if (!m_loop && advanced >= clip.duration) m_current_time = clip.duration;
+    if (m_current.loop && clip.duration > 0.0f && advanced >= clip.duration) wrapped = true;
+    m_current.time = clip_time(advanced, clip.duration, m_current.loop);
+    if (!m_current.loop && advanced >= clip.duration) m_current.time = clip.duration;
 
+    // Events fire from the dominant side of a blend: footfalls follow the
+    // gait the viewer actually sees.
     std::uint32_t fired_count = 0;
     if (events != nullptr) {
+        const char* event_clip_name = m_data->clips[dominant_clip(m_current)].name;
         for (std::size_t i = 0; i < events->events.size(); ++i) {
             const AnimationEvent& event = events->events[i];
-            if (std::strcmp(event.clip, clip.name) == 0 &&
-                event_crossed(event.time, old_time, m_current_time, wrapped)) {
+            if (std::strcmp(event.clip, event_clip_name) == 0 &&
+                event_crossed(event.time, old_time, m_current.time, wrapped)) {
                 if (fired_count >= fired_event_capacity) return ErrorCode::kOutOfMemory;
                 fired_events[fired_count++] = &event;
             }
@@ -427,18 +494,16 @@ Result<AnimationFrame> Animator::update(float delta_seconds, LinearArena& arena,
     const std::uint32_t joint_count = static_cast<std::uint32_t>(m_data->joints.size());
     auto pose = allocate_pose(arena, joint_count);
     if (!pose) return pose.error();
-    auto sampled = sample_clip(m_data->joints.data(), joint_count, clip, m_current_time, m_loop,
-                               pose.value().local);
+    auto sampled = sample_source(m_current, arena, pose.value().local);
     if (!sampled) return sampled.error();
 
     if (m_fade_elapsed < m_fade_duration) {
-        const asset::AnimationClip& previous = m_data->clips[m_previous_clip];
-        m_previous_time = clip_time(m_previous_time + delta_seconds, previous.duration,
-                                    m_previous_loop);
+        const float previous_duration = m_data->clips[m_previous.lower].duration;
+        m_previous.time =
+            clip_time(m_previous.time + delta_seconds, previous_duration, m_previous.loop);
         auto previous_pose = arena.allocate<LocalTransform>(joint_count);
         if (!previous_pose) return previous_pose.error();
-        sampled = sample_clip(m_data->joints.data(), joint_count, previous, m_previous_time,
-                              m_previous_loop, previous_pose.value());
+        sampled = sample_source(m_previous, arena, previous_pose.value());
         if (!sampled) return sampled.error();
         m_fade_elapsed += delta_seconds;
         const float weight = m_fade_duration > 0.0f ? m_fade_elapsed / m_fade_duration : 1.0f;
@@ -454,8 +519,8 @@ Result<AnimationFrame> Animator::update(float delta_seconds, LinearArena& arena,
 }
 
 bool Animator::finished() const noexcept {
-    if (m_data == nullptr || m_loop) return false;
-    return m_current_time >= m_data->clips[m_current_clip].duration;
+    if (m_data == nullptr || m_current.loop) return false;
+    return m_current.time >= m_data->clips[m_current.lower].duration;
 }
 
 } // namespace hue::anim

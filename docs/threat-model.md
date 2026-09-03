@@ -119,6 +119,25 @@ Defenses:
    caps file/event/string sizes, rejects non-finite or negative times, then
    verifies every event against a real clip and its duration.
 
+### Physics collision cooking boundary (Week 8)
+
+Static collision is cooked from the same mesh data the renderer draws
+(procedural arena and validated glTF imports), so asset-derived triangles
+reach Jolt's `MeshShape` cooker.
+
+Defenses:
+
+1. **Upstream validation** — cooked data has already passed the glTF
+   loader's accessor/index checks; the procedural scene is trusted code.
+2. **Facade revalidation** — `add_static_mesh` re-checks every index
+   against the vertex count, requires index triples, and caps soup size
+   (≤ 1M vertices / 3M indices) before Jolt sees it.
+3. **Bounded world** — static body count is capped; cook failures reject
+   the mesh with an error instead of asserting inside Jolt.
+
+Capsule controllers and raycasts only consume engine-generated parameters
+(validated at the facade), not asset data.
+
 ## Local debug surfaces
 
 | Surface | Binding | Guards |

@@ -118,6 +118,95 @@ TEST_CASE("animator: crossfades, emits crossed events, and finishes one-shots") 
     CHECK(animator.finished());
 }
 
+TEST_CASE("animator: 1D blend mixes clips by parameter and fires dominant-side events") {
+    auto data = make_test_character();
+    auto arena = hue::LinearArena::create(32 * 1024, hue::MemoryTag::kAnimation);
+    REQUIRE(arena);
+
+    hue::anim::Animator animator;
+    REQUIRE(animator.bind(data));
+    // Blend space over speed 0..4: clip 0 ("idle", +x motion) at 0,
+    // clip 1 ("attack", +z motion) at 4. Fade 0 so poses are pure blend.
+    REQUIRE(animator.play_blend(0, 1, 0.0f, 4.0f, 0.0f));
+    CHECK(animator.blending());
+
+    // Midpoint parameter: both clips contribute half at t=0.5.
+    animator.set_blend_parameter(2.0f);
+    auto frame = animator.update(0.5f, arena.value());
+    REQUIRE(frame);
+    // Root joint (0) world translation shows up directly in its skinning
+    // row: clip0 moves +x by 1.0 at t=0.5, clip1 moves +z by 2.0.
+    CHECK(frame.value().skinning_matrices[0].at(0, 3) == doctest::Approx(0.5f));
+    CHECK(frame.value().skinning_matrices[0].at(2, 3) == doctest::Approx(1.0f));
+
+    // Parameter clamps to the configured interval.
+    animator.set_blend_parameter(99.0f);
+    CHECK(animator.current_clip() == 1); // upper side dominant
+
+    // Events fire from the dominant clip only: with the parameter high the
+    // dominant clip is "attack", so its events fire; drop the parameter and
+    // the "attack" events stop.
+    constexpr char json[] =
+        R"({"events":[{"clip":"attack","time":0.2,"name":"hit_begin"}]})";
+    auto events = hue::anim::parse_animation_events(json, sizeof(json) - 1);
+    REQUIRE(events);
+    hue::anim::Animator event_animator;
+    REQUIRE(event_animator.bind(data));
+    REQUIRE(event_animator.play_blend(0, 1, 0.0f, 4.0f, 0.0f));
+    event_animator.set_blend_parameter(4.0f);
+    const hue::anim::AnimationEvent* fired[4]{};
+    arena.value().reset();
+    auto high = event_animator.update(0.25f, arena.value(), &events.value(), fired, 4);
+    REQUIRE(high);
+    CHECK(high.value().fired_event_count == 1);
+
+    hue::anim::Animator quiet_animator;
+    REQUIRE(quiet_animator.bind(data));
+    REQUIRE(quiet_animator.play_blend(0, 1, 0.0f, 4.0f, 0.0f));
+    quiet_animator.set_blend_parameter(0.0f); // idle side dominant
+    arena.value().reset();
+    auto low = quiet_animator.update(0.25f, arena.value(), &events.value(), fired, 4);
+    REQUIRE(low);
+    CHECK(low.value().fired_event_count == 0);
+}
+
+TEST_CASE("animator: blend validation rejects mismatched durations and bad ranges") {
+    auto data = make_test_character();
+
+    hue::asset::AnimationClip slow;
+    std::strcpy(slow.name, "slow");
+    slow.duration = 2.0f; // different from the 1.0s clips
+    hue::asset::AnimationChannel channel;
+    channel.joint = 0;
+    channel.path = hue::asset::AnimationPath::kTranslation;
+    const float times[] = {0.0f, 2.0f};
+    const float values[] = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    CHECK(channel.times.append(times, 2));
+    CHECK(channel.values.append(values, 6));
+    CHECK(slow.channels.push_back(std::move(channel)));
+    CHECK(data.clips.push_back(std::move(slow)));
+
+    hue::anim::Animator animator;
+    REQUIRE(animator.bind(data));
+    CHECK_FALSE(animator.play_blend(0, 2, 0.0f, 4.0f)); // mismatched durations
+    CHECK_FALSE(animator.play_blend(0, 0, 0.0f, 4.0f)); // same clip twice
+    CHECK_FALSE(animator.play_blend(0, 1, 4.0f, 0.0f)); // inverted interval
+    CHECK_FALSE(animator.play_blend(0, 9, 0.0f, 4.0f)); // out of range clip
+
+    // Leaving a blend crossfades back into a plain clip cleanly.
+    REQUIRE(animator.play_blend(0, 1, 0.0f, 4.0f, 0.0f));
+    auto arena = hue::LinearArena::create(32 * 1024, hue::MemoryTag::kAnimation);
+    REQUIRE(arena);
+    REQUIRE(animator.update(0.1f, arena.value()));
+    REQUIRE(animator.play(1, 0.1f, false));
+    CHECK_FALSE(animator.blending());
+    arena.value().reset();
+    REQUIRE(animator.update(0.05f, arena.value())); // mid-fade from the blend
+    arena.value().reset();
+    REQUIRE(animator.update(1.0f, arena.value()));
+    CHECK(animator.finished());
+}
+
 TEST_CASE("animation events: malformed and excessive inputs are rejected") {
     constexpr char malformed[] = R"({"events":[{"clip":"attack","time":-1,"name":"hit"}]})";
     CHECK_FALSE(hue::anim::parse_animation_events(malformed, sizeof(malformed) - 1));

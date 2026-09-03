@@ -23,6 +23,7 @@ enum class MemoryTag : std::uint8_t {
     kAnimation,
     kPhysics,
     kAssets,
+    kEcs,
     kGame,
     kCount,
 };

@@ -197,6 +197,18 @@ hue::Result<StaticMeshData> build_ground_scene() {
         return hue::ErrorCode::kOutOfMemory;
     }
 
+    // Walkable ramp (Week 8): a 20-degree slab rising toward the pillar so
+    // the live arena exercises the controller's slope handling, not just
+    // the unit tests. Low edge sits flush with the ground at x ~ -5.4.
+    MeshInstance ramp;
+    ramp.primitive_index = 1;
+    ramp.transform = Mat4::trs({-4.0f, 0.62f, 0.0f},
+                               Quat::from_axis_angle({0.0f, 0.0f, 1.0f}, hue::radians(20.0f)),
+                               {3.0f, 0.3f, 2.0f});
+    if (!data.instances.push_back(ramp)) {
+        return hue::ErrorCode::kOutOfMemory;
+    }
+
     data.bounds = hue::Aabb{{-20.0f, 0.0f, -20.0f}, {20.0f, 3.0f, 20.0f}};
     return data;
 }

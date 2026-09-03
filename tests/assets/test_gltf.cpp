@@ -398,9 +398,10 @@ TEST_CASE("gltf skinned: character imports with skeleton clips and texture") {
     }
     CHECK(blended_vertices > 0);
 
-    REQUIRE(mesh.value().clips.size() == 5);
-    const char* expected_clips[5] = {"locomotion", "attack", "dodge", "hit_react", "death"};
-    for (std::size_t c = 0; c < 5; ++c) {
+    REQUIRE(mesh.value().clips.size() == 7);
+    const char* expected_clips[7] = {"locomotion", "attack", "dodge", "hit_react",
+                                     "death",      "idle",   "walk"};
+    for (std::size_t c = 0; c < 7; ++c) {
         CHECK(std::strcmp(mesh.value().clips[c].name, expected_clips[c]) == 0);
         CHECK(mesh.value().clips[c].duration > 0.0f);
         CHECK(mesh.value().clips[c].channels.size() > 0);

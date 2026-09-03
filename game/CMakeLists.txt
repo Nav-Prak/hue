@@ -6,11 +6,14 @@ add_executable(hue_game
     src/characters.h
     src/fly_camera.cpp
     src/fly_camera.h
+    src/follow_camera.cpp
+    src/follow_camera.h
     src/main.cpp
     src/test_meshes.cpp
     src/test_meshes.h
 )
-target_link_libraries(hue_game PRIVATE hue::core hue::asset hue::anim hue::render)
+target_link_libraries(hue_game
+    PRIVATE hue::core hue::asset hue::anim hue::ecs hue::physics hue::render)
 set_target_properties(hue_game PROPERTIES OUTPUT_NAME "hue")
 hue_target_runtime_deps(hue_game)
 hue_target_shaders(hue_game

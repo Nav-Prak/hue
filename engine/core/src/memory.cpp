@@ -199,6 +199,8 @@ const char* memory_tag_name(MemoryTag tag) noexcept {
         return "physics";
     case MemoryTag::kAssets:
         return "assets";
+    case MemoryTag::kEcs:
+        return "ecs";
     case MemoryTag::kGame:
         return "game";
     case MemoryTag::kCount:

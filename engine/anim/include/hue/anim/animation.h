@@ -91,25 +91,50 @@ public:
     [[nodiscard]] Result<void> play(std::uint32_t clip, float fade_seconds = 0.15f,
                                     bool loop = true) noexcept;
 
+    // 1D blend space between two looping clips (Week 8: walk/run by speed).
+    // Both clips must share one duration so a single phase drives them.
+    // The blend crossfades in/out like any other clip via play()/play_blend().
+    [[nodiscard]] Result<void> play_blend(std::uint32_t lower_clip, std::uint32_t upper_clip,
+                                          float lower_position, float upper_position,
+                                          float fade_seconds = 0.15f) noexcept;
+    // Moves the blend parameter (e.g. current speed); clamped to the
+    // configured positions. No-op unless a blend is playing.
+    void set_blend_parameter(float parameter) noexcept;
+
     [[nodiscard]] Result<AnimationFrame>
     update(float delta_seconds, LinearArena& arena, const AnimationEventTrack* events = nullptr,
            const AnimationEvent** fired_events = nullptr,
            std::uint32_t fired_event_capacity = 0) noexcept;
 
-    [[nodiscard]] std::uint32_t current_clip() const noexcept { return m_current_clip; }
-    [[nodiscard]] float current_time() const noexcept { return m_current_time; }
+    // Dominant clip: for blends, whichever side currently carries more weight
+    // (events also fire from this clip).
+    [[nodiscard]] std::uint32_t current_clip() const noexcept;
+    [[nodiscard]] bool blending() const noexcept { return m_current.blended; }
+    [[nodiscard]] float current_time() const noexcept { return m_current.time; }
     [[nodiscard]] bool finished() const noexcept;
 
 private:
+    struct Source {
+        std::uint32_t lower = 0; // the only clip when not blended
+        std::uint32_t upper = 0;
+        float lower_position = 0.0f;
+        float upper_position = 1.0f;
+        float parameter = 0.0f;
+        float time = 0.0f;
+        bool loop = true;
+        bool blended = false;
+    };
+
+    [[nodiscard]] float blend_weight(const Source& source) const noexcept;
+    [[nodiscard]] std::uint32_t dominant_clip(const Source& source) const noexcept;
+    [[nodiscard]] Result<void> sample_source(const Source& source, LinearArena& arena,
+                                             LocalTransform* out) noexcept;
+
     const asset::SkinnedMeshData* m_data = nullptr;
-    std::uint32_t m_current_clip = 0;
-    std::uint32_t m_previous_clip = 0;
-    float m_current_time = 0.0f;
-    float m_previous_time = 0.0f;
+    Source m_current;
+    Source m_previous;
     float m_fade_elapsed = 0.0f;
     float m_fade_duration = 0.0f;
-    bool m_loop = true;
-    bool m_previous_loop = true;
 };
 
 } // namespace hue::anim
