@@ -207,6 +207,66 @@ TEST_CASE("animator: blend validation rejects mismatched durations and bad range
     CHECK(animator.finished());
 }
 
+// Mirrors game/src/main.cpp AnimatedCharacter::update: one tick of the
+// attack-then-locomotion state machine. Returns whether the animator is in
+// the middle of the attack one-shot after the tick's play decisions.
+namespace {
+
+struct CharacterTickState {
+    bool attack_requested = false;
+    float speed = 0.0f;
+};
+
+[[nodiscard]] bool game_style_attacking(const hue::anim::Animator& animator,
+                                        std::uint32_t attack_clip) {
+    return !animator.blending() && animator.current_clip() == attack_clip &&
+           !animator.finished();
+}
+
+void game_style_tick(hue::anim::Animator& animator, CharacterTickState& state,
+                     hue::LinearArena& arena, std::uint32_t idle_clip,
+                     std::uint32_t attack_clip, float dt) {
+    if (state.attack_requested && !game_style_attacking(animator, attack_clip)) {
+        REQUIRE(animator.play(attack_clip, 0.12f, false));
+        state.attack_requested = false;
+    }
+    if (!game_style_attacking(animator, attack_clip)) {
+        REQUIRE(animator.play(idle_clip, 0.2f, true));
+    }
+    arena.reset();
+    REQUIRE(animator.update(dt, arena));
+}
+
+} // namespace
+
+TEST_CASE("animator: game-style attack requests always restart the one-shot") {
+    auto data = make_test_character(); // clip 0 = "idle" (loop), clip 1 = "attack"
+    auto arena = hue::LinearArena::create(32 * 1024, hue::MemoryTag::kAnimation);
+    REQUIRE(arena);
+    hue::anim::Animator animator;
+    REQUIRE(animator.bind(data, 0));
+    CharacterTickState state;
+    constexpr float kTick = 1.0f / 60.0f;
+
+    // Settle in idle, then press attack: the one-shot must take over.
+    for (int i = 0; i < 30; ++i) game_style_tick(animator, state, arena.value(), 0, 1, kTick);
+    state.attack_requested = true;
+    game_style_tick(animator, state, arena.value(), 0, 1, kTick);
+    CHECK(game_style_attacking(animator, 1));
+
+    // Press attack again mid-swing: the request is held (game keeps the
+    // flag set while attacking), and once the first swing finishes the
+    // held request must start a second swing, not be silently eaten.
+    state.attack_requested = true;
+    for (int i = 0; i < 70; ++i) { // > 1s: run the first swing to completion
+        game_style_tick(animator, state, arena.value(), 0, 1, kTick);
+        if (!state.attack_requested) break; // consumed: second swing started
+    }
+    CHECK_FALSE(state.attack_requested);
+    CHECK(game_style_attacking(animator, 1)); // second swing actually playing
+    CHECK(animator.current_time() < 0.5f);    // restarted from the top
+}
+
 TEST_CASE("animation events: malformed and excessive inputs are rejected") {
     constexpr char malformed[] = R"({"events":[{"clip":"attack","time":-1,"name":"hit"}]})";
     CHECK_FALSE(hue::anim::parse_animation_events(malformed, sizeof(malformed) - 1));

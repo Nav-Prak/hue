@@ -621,7 +621,7 @@ int main(int argc, char** argv) {
 
         if (draw_count > 0) {
             HUE_LOG_INFO("scene ready: %u meshes, 2 point lights (RMB orbit, WASD move, "
-                         "shift run, Space attack, F1 debug fly cam)",
+                         "shift run, Space/pad-X attack, F1 debug fly cam)",
                          draw_count);
         }
     }
@@ -778,7 +778,8 @@ int main(int argc, char** argv) {
 
         const double frame_seconds = clock.tick();
         const int steps = timestep.advance(frame_seconds);
-        if (input.key_pressed(hue::key::kSpace) && animated_characters[0]) {
+        if ((input.key_pressed(hue::key::kSpace) || input.pad_pressed(hue::pad::kX)) &&
+            animated_characters[0]) {
             animated_characters[0]->request_attack();
         }
         for (int s = 0; s < steps; ++s) {

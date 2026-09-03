@@ -381,7 +381,12 @@ Result<void> Animator::play(std::uint32_t clip, float fade_seconds, bool loop) n
         fade_seconds < 0.0f) {
         return ErrorCode::kInvalidArgument;
     }
-    if (!m_current.blended && clip == m_current.lower && loop == m_current.loop) return {};
+    // Re-playing the active clip is a no-op *unless* it is a finished
+    // one-shot: a queued attack request must restart the swing rather than
+    // be eaten by the frozen last frame still being "current".
+    if (!m_current.blended && clip == m_current.lower && loop == m_current.loop && !finished()) {
+        return {};
+    }
     m_previous = m_current;
     m_current = Source{};
     m_current.lower = clip;
