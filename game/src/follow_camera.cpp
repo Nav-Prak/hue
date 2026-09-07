@@ -20,6 +20,13 @@ constexpr float kArmOutOmega = 5.0f;        // relax out slowly
 constexpr float kFovYRadians = hue::radians(55.0f);
 constexpr float kNearPlane = 0.1f;
 constexpr float kFarPlane = 200.0f;
+constexpr float kLockYawOmega = 6.0f; // lock-on bias stiffness
+
+[[nodiscard]] float wrap_pi(float radians_in) noexcept {
+    while (radians_in > hue::kPi) radians_in -= hue::kTwoPi;
+    while (radians_in < -hue::kPi) radians_in += hue::kTwoPi;
+    return radians_in;
+}
 } // namespace
 
 hue::Vec3 FollowCamera::forward() const {
@@ -28,13 +35,26 @@ hue::Vec3 FollowCamera::forward() const {
 }
 
 void FollowCamera::update(const hue::Input& input, float dt, hue::Vec3 target_feet,
-                          const hue::physics::PhysicsWorld& physics) {
+                          const hue::physics::PhysicsWorld& physics,
+                          const hue::Vec3* lock_target) {
     using namespace hue;
 
     if (input.mouse_down(mouse::kRight)) {
         m_yaw -= static_cast<float>(input.mouse_dx()) * kLookSensitivity;
         m_pitch -= static_cast<float>(input.mouse_dy()) * kLookSensitivity;
         m_pitch = clamp(m_pitch, kPitchMin, kPitchMax);
+    }
+
+    // Lock-on bias: ease the yaw toward the player->target line. Manual
+    // RMB orbit above still applies, so the player can offset the frame;
+    // the bias keeps pulling it back while locked.
+    if (lock_target != nullptr) {
+        const Vec3 to_target{lock_target->x - target_feet.x, 0.0f,
+                             lock_target->z - target_feet.z};
+        if (length_squared(to_target) > 0.01f) {
+            const float desired_yaw = std::atan2(-to_target.x, -to_target.z);
+            m_yaw += damp(0.0f, wrap_pi(desired_yaw - m_yaw), kLockYawOmega, dt);
+        }
     }
 
     const Vec3 pivot_target = target_feet + Vec3{0.0f, kPivotHeight, 0.0f};

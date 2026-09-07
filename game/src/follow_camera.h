@@ -3,6 +3,8 @@
 // Week 8 third-person follow camera: spring-arm boom behind the player
 // with a physics collision probe. Hold right mouse to orbit; the arm
 // shortens instantly when geometry intrudes and relaxes back slowly.
+// Week 9 lock-on: an optional target eases the yaw toward the line
+// player -> target so the enemy stays framed while strafing.
 
 #pragma once
 
@@ -14,7 +16,8 @@
 class FollowCamera {
 public:
     void update(const hue::Input& input, float dt, hue::Vec3 target_feet,
-                const hue::physics::PhysicsWorld& physics);
+                const hue::physics::PhysicsWorld& physics,
+                const hue::Vec3* lock_target = nullptr);
 
     [[nodiscard]] hue::Camera camera(float aspect) const;
     [[nodiscard]] float yaw() const { return m_yaw; }

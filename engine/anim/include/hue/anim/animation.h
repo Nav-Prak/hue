@@ -88,8 +88,10 @@ public:
 
     [[nodiscard]] Result<void> bind(const asset::SkinnedMeshData& data,
                                     std::uint32_t initial_clip = 0) noexcept;
+    // restart=true forces the clip to take from time 0 even when it is
+    // already current (attack chains replay the same one-shot mid-recovery).
     [[nodiscard]] Result<void> play(std::uint32_t clip, float fade_seconds = 0.15f,
-                                    bool loop = true) noexcept;
+                                    bool loop = true, bool restart = false) noexcept;
 
     // 1D blend space between two looping clips (Week 8: walk/run by speed).
     // Both clips must share one duration so a single phase drives them.

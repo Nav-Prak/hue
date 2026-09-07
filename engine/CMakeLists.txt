@@ -5,5 +5,6 @@ add_subdirectory(anim)
 add_subdirectory(render)
 add_subdirectory(ecs)
 add_subdirectory(physics)
+add_subdirectory(combat)
 # Future subsystems, added as they come online per plan.md:
 # add_subdirectory(debugui)  # Week 13

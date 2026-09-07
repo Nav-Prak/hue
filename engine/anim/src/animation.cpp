@@ -376,15 +376,18 @@ Result<void> Animator::bind(const asset::SkinnedMeshData& data,
     return {};
 }
 
-Result<void> Animator::play(std::uint32_t clip, float fade_seconds, bool loop) noexcept {
+Result<void> Animator::play(std::uint32_t clip, float fade_seconds, bool loop,
+                            bool restart) noexcept {
     if (m_data == nullptr || clip >= m_data->clips.size() || !std::isfinite(fade_seconds) ||
         fade_seconds < 0.0f) {
         return ErrorCode::kInvalidArgument;
     }
-    // Re-playing the active clip is a no-op *unless* it is a finished
-    // one-shot: a queued attack request must restart the swing rather than
-    // be eaten by the frozen last frame still being "current".
-    if (!m_current.blended && clip == m_current.lower && loop == m_current.loop && !finished()) {
+    // Re-playing the active clip is a no-op *unless* the caller forces a
+    // restart or the clip is a finished one-shot: a queued attack request
+    // must restart the swing rather than be eaten by the frozen last frame
+    // still being "current".
+    if (!restart && !m_current.blended && clip == m_current.lower && loop == m_current.loop &&
+        !finished()) {
         return {};
     }
     m_previous = m_current;

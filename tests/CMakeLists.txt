@@ -11,6 +11,7 @@ FetchContent_MakeAvailable(doctest)
 add_executable(hue_tests
     main.cpp
     anim/test_animation.cpp
+    combat/test_combat.cpp
     ecs/test_ecs.cpp
     physics/test_physics.cpp
     core/bench_math.cpp
@@ -37,7 +38,7 @@ target_compile_definitions(hue_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WI
 target_compile_definitions(hue_tests PRIVATE
     HUE_TEST_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tools/fuzz/corpus/gltf"
     HUE_TEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/assets/models")
-target_link_libraries(hue_tests PRIVATE hue_core hue::asset hue::anim hue::ecs hue::physics hue::render doctest::doctest hue::options)
+target_link_libraries(hue_tests PRIVATE hue_core hue::asset hue::anim hue::combat hue::ecs hue::physics hue::render doctest::doctest hue::options)
 if(MSVC)
     # VS 2026 warns on doctest 2.4.12's intentional std::tuple specialization.
     # Keep the suppression scoped to the third-party test harness consumer.

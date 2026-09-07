@@ -17,6 +17,7 @@ class Window;
 namespace key {
 // Subset of the keyboard used by engine/game code; extend as needed.
 inline constexpr int kSpace = 32;
+inline constexpr int kTab = 258;
 inline constexpr int kA = 65;
 inline constexpr int kD = 68;
 inline constexpr int kE = 69;
