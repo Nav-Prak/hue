@@ -369,8 +369,8 @@ TEST_CASE("gltf skinned: out-of-range joint index rejected") {
     CHECK(mesh.error() == ErrorCode::kCorruptData);
 }
 
-TEST_CASE("gltf skinned: character imports with skeleton clips and texture") {
-    const auto bytes = read_sample(HUE_TEST_MODELS_DIR, "player.glb");
+TEST_CASE("gltf skinned: generated fixture has skeleton clips and texture") {
+    const auto bytes = read_sample(HUE_TEST_CORPUS_DIR, "skinned_character.glb");
     auto mesh = hue::asset::load_gltf_skinned(bytes.data(), bytes.size());
     REQUIRE(mesh);
 
@@ -398,10 +398,10 @@ TEST_CASE("gltf skinned: character imports with skeleton clips and texture") {
     }
     CHECK(blended_vertices > 0);
 
-    REQUIRE(mesh.value().clips.size() == 7);
-    const char* expected_clips[7] = {"locomotion", "attack", "dodge", "hit_react",
-                                     "death",      "idle",   "walk"};
-    for (std::size_t c = 0; c < 7; ++c) {
+    REQUIRE(mesh.value().clips.size() == 8);
+    const char* expected_clips[8] = {"locomotion", "attack", "dodge", "hit_react",
+                                     "death",      "idle",   "walk",  "attack_heavy"};
+    for (std::size_t c = 0; c < 8; ++c) {
         CHECK(std::strcmp(mesh.value().clips[c].name, expected_clips[c]) == 0);
         CHECK(mesh.value().clips[c].duration > 0.0f);
         CHECK(mesh.value().clips[c].channels.size() > 0);
@@ -412,6 +412,28 @@ TEST_CASE("gltf skinned: character imports with skeleton clips and texture") {
     CHECK(mesh.value().textures[0].srgb);
     REQUIRE(mesh.value().materials.size() == 1);
     CHECK(mesh.value().materials[0].base_color_texture == 0);
+}
+
+TEST_CASE("gltf skinned: KayKit player has combat clips and multi-primitive skin") {
+    const auto bytes = read_sample(HUE_TEST_MODELS_DIR, "player.glb");
+    auto mesh = hue::asset::load_gltf_skinned(bytes.data(), bytes.size());
+    REQUIRE(mesh);
+    CHECK(mesh.value().joints.size() >= 19);
+    CHECK(mesh.value().primitives.size() >= 2);
+    CHECK(mesh.value().textures.size() >= 1);
+    const char* required[] = {"locomotion", "attack", "dodge", "hit_react",
+                              "death",      "idle",   "walk",  "attack_heavy"};
+    for (const char* name : required) {
+        bool found = false;
+        for (std::size_t c = 0; c < mesh.value().clips.size(); ++c) {
+            if (std::strcmp(mesh.value().clips[c].name, name) == 0) {
+                found = mesh.value().clips[c].duration > 0.0f &&
+                        mesh.value().clips[c].channels.size() > 0;
+                break;
+            }
+        }
+        CHECK(found);
+    }
 }
 
 TEST_CASE("gltf skinned: static-only file rejected by skinned path") {

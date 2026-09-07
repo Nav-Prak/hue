@@ -912,7 +912,9 @@ Result<SkinnedMeshData> load_gltf_skinned(const void* bytes, std::size_t size) n
     }
     const cgltf_data& data = *guard.data;
 
-    // First node carrying both a mesh and a skin is the character.
+    // First node carrying both a mesh and a skin picks the skeleton.
+    // KayKit-style characters split the body across several mesh nodes
+    // that share that skin; collect every primitive on that skin.
     const cgltf_node* skinned_node = nullptr;
     for (cgltf_size n = 0; n < data.nodes_count; ++n) {
         if (data.nodes[n].mesh != nullptr && data.nodes[n].skin != nullptr) {
@@ -951,22 +953,33 @@ Result<SkinnedMeshData> load_gltf_skinned(const void* bytes, std::size_t size) n
         return joints.error();
     }
 
-    // ---- geometry (bind pose)
-    const cgltf_mesh& mesh = *skinned_node->mesh;
-    if (mesh.primitives_count == 0 || mesh.primitives_count > kGltfMaxPrimitives) {
-        return ErrorCode::kCorruptData;
-    }
+    // ---- geometry (bind pose): every mesh node that uses this skin.
     GeometryTotals totals;
-    for (cgltf_size p = 0; p < mesh.primitives_count; ++p) {
-        const std::uint32_t vertices_before = totals.vertices;
-        const auto appended = append_skinned_primitive(out, data, mesh.primitives[p], remap,
-                                                       joint_count, totals);
-        if (!appended) {
-            return appended.error();
+    bool have_primitive = false;
+    for (cgltf_size n = 0; n < data.nodes_count; ++n) {
+        const cgltf_node& node = data.nodes[n];
+        if (node.mesh == nullptr || node.skin != &skin) {
+            continue;
         }
-        const Aabb local = primitive_local_bounds(out.vertices, vertices_before,
-                                                  totals.vertices - vertices_before);
-        out.bounds = p == 0 ? local : out.bounds.merged(local);
+        const cgltf_mesh& mesh = *node.mesh;
+        if (mesh.primitives_count == 0 || mesh.primitives_count > kGltfMaxPrimitives) {
+            return ErrorCode::kCorruptData;
+        }
+        for (cgltf_size p = 0; p < mesh.primitives_count; ++p) {
+            const std::uint32_t vertices_before = totals.vertices;
+            const auto appended = append_skinned_primitive(out, data, mesh.primitives[p], remap,
+                                                           joint_count, totals);
+            if (!appended) {
+                return appended.error();
+            }
+            const Aabb local = primitive_local_bounds(out.vertices, vertices_before,
+                                                      totals.vertices - vertices_before);
+            out.bounds = have_primitive ? out.bounds.merged(local) : local;
+            have_primitive = true;
+        }
+    }
+    if (!have_primitive) {
+        return ErrorCode::kCorruptData;
     }
 
     // ---- animation clips

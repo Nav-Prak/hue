@@ -4,6 +4,8 @@ include(${CMAKE_SOURCE_DIR}/cmake/HueShaders.cmake)
 add_executable(hue_game
     src/characters.cpp
     src/characters.h
+    src/combat_character.cpp
+    src/combat_character.h
     src/fly_camera.cpp
     src/fly_camera.h
     src/follow_camera.cpp
@@ -13,7 +15,7 @@ add_executable(hue_game
     src/test_meshes.h
 )
 target_link_libraries(hue_game
-    PRIVATE hue::core hue::asset hue::anim hue::ecs hue::physics hue::render)
+    PRIVATE hue::core hue::asset hue::anim hue::combat hue::ecs hue::physics hue::render)
 set_target_properties(hue_game PROPERTIES OUTPUT_NAME "hue")
 hue_target_runtime_deps(hue_game)
 hue_target_shaders(hue_game

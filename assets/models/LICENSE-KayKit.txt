@@ -1,0 +1,17 @@
+KayKit Adventurers 2.0 (Knight, Barbarian) and KayKit Character Animations 1.1
+by Kay Lousberg, https://www.kaylousberg.com
+
+License: Creative Commons Zero (CC0 1.0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Free to use in personal, educational, and commercial projects.
+Attribution is not required; if you credit the author, use
+"Kay Lousberg, www.kaylousberg.com".
+
+Original packs:
+  https://kaylousberg.itch.io/kaykit-adventurers
+  https://kaylousberg.itch.io/kaykit-character-animations
+
+Hue bakes a subset (eight clips + a right-hand weapon) into player.glb
+and enemy.glb via tools/assets/bake_kaykit.py. The bake does not change
+the license.

@@ -22,6 +22,7 @@ crash-*
 # Python tooling
 __pycache__/
 *.pyc
+/tools/assets/_kaykit_src/
 
 # OS noise
 Thumbs.db

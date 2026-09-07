@@ -1,46 +1,54 @@
 # Character models
 
-`player.glb` and `enemy.glb` are **generated placeholder characters**, not
-downloaded assets. They are produced deterministically by
-`tools/assets/generate_characters.py` (pure Python stdlib — regenerate any
-time with `python tools/assets/generate_characters.py`).
+`player.glb` (KayKit Knight) and `enemy.glb` (KayKit Barbarian) are
+**imported CC0 characters**, not the generated tubes. They are baked by
+`tools/assets/bake_kaykit.py` from Kay Lousberg's Adventurers + Character
+Animations packs. License: `LICENSE-KayKit.txt` (CC0, no attribution
+required).
 
-## Why generated instead of Mixamo
+The generated 19-joint humanoid still exists as a deterministic fuzz and
+unit-test fixture (`tools/fuzz/corpus/gltf/skinned_character.glb`, rebuilt
+by `tools/assets/generate_characters.py`). The importer does not care
+which rig it is given, as long as the file stays within the caps
+(≤256 joints, LINEAR clips, embedded textures).
 
-The original plan named Mixamo characters for the Week 6 import milestone.
-That was deliberately substituted:
+## Why KayKit instead of Mixamo
 
-- **Licensing** — this is a public repo; Mixamo's terms allow use in
-  projects but not redistribution of the raw assets. Generated rigs are
-  ours outright and can live in git.
-- **Determinism** — the exact bytes are reproducible from a small script,
-  which also makes them honest fuzz-corpus seeds and unit-test fixtures
-  (`tests/assets/test_gltf.cpp` asserts against their structure).
-- **The importer doesn't care** — `load_gltf_skinned` accepts any rigged
-  GLB within its caps (≤256 joints). A Mixamo-class rig drops in later by
-  replacing these files; nothing in the engine is shaped around the
-  placeholder.
+The original plan named Mixamo. Mixamo allows use in a finished game but
+forbids redistributing the raw character/animation files, which a public
+repo would do. KayKit is CC0, ships glTF, and includes a combat clip set
+that maps onto the Week 9 state machine.
 
-## What they contain
+## What the live GLBs contain
 
-Everything the Week 6 spec requires the importer to handle:
+- Rig_Medium humanoid (23 joints including hand slots) with inverse binds.
+- Multi-primitive body (head, arms, legs, armor) plus a weapon skinned to
+  `handslot.r` (knight: 1H sword, barbarian: 2H axe).
+- Embedded PNG atlas and metallic-roughness material.
+- Eight LINEAR clips, renamed for Hue:
 
-- 19-joint humanoid skeleton (hips → spine → chest → neck → head; shoulder
-  → upper arm → forearm → hand per side; thigh → shin → foot per side)
-  with inverse bind matrices.
-- Smooth skinning: limb-tube vertices blend between the two nearest
-  joints (real multi-influence weights, u16 joints / f32 weights).
-- Embedded 64x64 PNG base color texture + metallic-roughness material.
-- Seven LINEAR clips: `locomotion` (run), `attack`, `dodge`, `hit_react`,
-  `death`, `idle`, and `walk` — the set the combat state machine consumes
-  from Week 9. `walk` shares the 0.8s period of `locomotion` so the 1D
-  speed blend can drive both gaits from a single phase.
+  | Hue clip | KayKit source |
+  |---|---|
+  | `idle` | `Idle_B` (2.13s) |
+  | `walk` | `Walking_A` (1.07s) |
+  | `locomotion` | `Running_A` (0.80s) |
+  | `attack` | `Melee_1H_Attack_Chop` (1.07s) |
+  | `attack_heavy` | `Melee_2H_Attack_Chop` (1.63s) |
+  | `dodge` | `Dodge_Forward` (0.40s) |
+  | `hit_react` | `Hit_A` (0.67s) |
+  | `death` | `Death_B` (2.63s) |
 
-The Week 7 runtime samples these clips into frame-arena poses, crossfades
-between locomotion and one-shots, and uploads joint palettes for GPU skinning.
-The adjacent `*.events.json` files provide validated attack, cancel, hitbox,
-invulnerability, and footstep timing without modifying the GLBs.
+Walk and run do **not** share a period. The 1D speed blend wraps each
+clip on its own duration.
 
-Since Week 8 the live demo drives the walk↔run 1D blend from the capsule
-controller's solved ground speed (idle below 0.2 m/s, walk at 1.6, run at
-4.0), with the third-person follow camera orbiting the player.
+The adjacent `*.events.json` files time cancel windows, hitboxes, i-frames,
+and footsteps against those real clip lengths.
+
+## Rebuild
+
+Extract the two free itch.io zips into `tools/assets/_kaykit_src/`
+(gitignored), then:
+
+```
+python tools/assets/bake_kaykit.py
+```

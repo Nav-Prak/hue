@@ -94,8 +94,9 @@ public:
                                     bool loop = true, bool restart = false) noexcept;
 
     // 1D blend space between two looping clips (Week 8: walk/run by speed).
-    // Both clips must share one duration so a single phase drives them.
-    // The blend crossfades in/out like any other clip via play()/play_blend().
+    // Each clip wraps on its own duration so imported walk/run gaits do not
+    // have to share a period. The blend crossfades in/out like any other
+    // clip via play()/play_blend().
     [[nodiscard]] Result<void> play_blend(std::uint32_t lower_clip, std::uint32_t upper_clip,
                                           float lower_position, float upper_position,
                                           float fade_seconds = 0.15f) noexcept;

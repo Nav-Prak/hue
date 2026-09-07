@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""Generates the Week 6 rigged characters: player.glb and enemy.glb.
+"""Generates the Week 6 rigged test character used as a fuzz/unit fixture.
 
-Mixamo-style stand-ins built in code (see assets/models/README.md for why
-these are generated rather than downloaded): a 19-joint humanoid skeleton
-(hips -> spine -> chest -> neck -> head, shoulder/upper-arm/forearm/hand
-per side, thigh/shin/foot per side) skinned smoothly -- limb tubes whose
-ring vertices blend between the two nearest joints, so vertices genuinely
-carry multiple influences like production rigs do. Embedded 64x64 PNG base
-color texture, metallic-roughness material, and five LINEAR animation
-clips: locomotion, attack, dodge, hit_react, death. Pure stdlib; output is
-deterministic so the GLBs can live in the repo and regenerate on demand.
-
-Also emits small skinned/textured seeds for the glTF fuzz corpus.
+19-joint humanoid (hips -> spine -> chest -> neck -> head, limbs) with
+smooth multi-influence skinning, embedded 64x64 PNG, and eight LINEAR
+clips. Live player/enemy GLBs are KayKit bakes (`bake_kaykit.py`); this
+script only refreshes tools/fuzz/corpus/gltf/*.glb. Pure stdlib.
 
 Usage: python tools/assets/generate_characters.py
 """
@@ -25,7 +18,6 @@ import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MODELS_DIR = ROOT / "assets" / "models"
 CORPUS_DIR = ROOT / "tools" / "fuzz" / "corpus" / "gltf"
 
 FLOAT = 5126
@@ -355,6 +347,28 @@ def clip_channels(name: str):
              [(0.0, axis_angle(y, 0.0)), (0.12, axis_angle(y, -0.2)),
               (0.28, axis_angle(y, 0.15)), (0.5, axis_angle(y, 0.0))]),
         ]
+    if name == "attack_heavy":
+        # Two-handed overhead smash (Week 9): slow raise, hold at the top,
+        # crash down with the chest pitching in, hips dipping on impact.
+        raise_keys = [(0.0, axis_angle(x, 0.0)), (0.35, axis_angle(x, -2.8)),
+                      (0.45, axis_angle(x, -2.8)), (0.6, axis_angle(x, 0.9)),
+                      (0.9, axis_angle(x, 0.0))]
+        return [
+            (J["upper_arm_r"], "rotation", list(raise_keys)),
+            (J["upper_arm_l"], "rotation", list(raise_keys)),
+            (J["forearm_r"], "rotation",
+             [(0.0, axis_angle(x, 0.0)), (0.35, axis_angle(x, -0.7)),
+              (0.6, axis_angle(x, 0.4)), (0.9, axis_angle(x, 0.0))]),
+            (J["forearm_l"], "rotation",
+             [(0.0, axis_angle(x, 0.0)), (0.35, axis_angle(x, -0.7)),
+              (0.6, axis_angle(x, 0.4)), (0.9, axis_angle(x, 0.0))]),
+            (J["chest"], "rotation",
+             [(0.0, axis_angle(x, 0.0)), (0.35, axis_angle(x, 0.35)),
+              (0.6, axis_angle(x, -0.5)), (0.9, axis_angle(x, 0.0))]),
+            (J["hips"], "translation",
+             [(0.0, (0.0, 0.95, 0.0)), (0.45, (0.0, 0.99, 0.0)),
+              (0.62, (0.0, 0.82, 0.0)), (0.9, (0.0, 0.95, 0.0))]),
+        ]
     if name == "dodge":
         return [
             (J["hips"], "translation",
@@ -428,7 +442,8 @@ def clip_channels(name: str):
     raise ValueError(name)
 
 
-CLIPS = ["locomotion", "attack", "dodge", "hit_react", "death", "idle", "walk"]
+CLIPS = ["locomotion", "attack", "dodge", "hit_react", "death", "idle", "walk",
+         "attack_heavy"]
 
 
 def build_character(base: tuple, accent: tuple, metallic: float, roughness: float) -> bytes:
@@ -579,17 +594,13 @@ def build_min_textured() -> bytes:
 
 
 def main() -> None:
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
     CORPUS_DIR.mkdir(parents=True, exist_ok=True)
 
     player = build_character(base=(58, 100, 190), accent=(224, 200, 120),
                              metallic=0.1, roughness=0.7)
     enemy = build_character(base=(170, 52, 48), accent=(40, 36, 34),
                             metallic=0.2, roughness=0.55)
-    (MODELS_DIR / "player.glb").write_bytes(player)
-    (MODELS_DIR / "enemy.glb").write_bytes(enemy)
-    print(f"player.glb: {len(player)} bytes")
-    print(f"enemy.glb: {len(enemy)} bytes")
+    print("(live player.glb / enemy.glb are KayKit bakes; see bake_kaykit.py)")
 
     seeds = {
         "skinned_min.glb": build_min_skinned(corrupt_joint=False),

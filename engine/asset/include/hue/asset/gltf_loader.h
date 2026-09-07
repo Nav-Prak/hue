@@ -47,12 +47,13 @@ inline constexpr float kGltfMaxClipSeconds = 600.0f;
 // Reads the file (size-capped) and delegates to load_gltf.
 [[nodiscard]] Result<StaticMeshData> load_gltf_file(const char* path) noexcept;
 
-// Parses a rigged .glb / .gltf blob: first node carrying both a mesh and a
-// skin, plus every animation clip that targets its joints. Same trust
-// boundary as load_gltf, with additional validation for JOINTS_0 /
-// WEIGHTS_0 (joint indices bounds-checked and remapped, weights finite and
-// renormalized), inverse bind matrices, and keyframe tracks (finite,
-// non-decreasing times; LINEAR interpolation only). Also a fuzz target.
+// Parses a rigged .glb / .gltf blob: every mesh node that shares the first
+// skin found on a mesh+skin node, plus every animation clip that targets
+// its joints. Same trust boundary as load_gltf, with additional validation
+// for JOINTS_0 / WEIGHTS_0 (joint indices bounds-checked and remapped,
+// weights finite and renormalized), inverse bind matrices, and keyframe
+// tracks (finite, non-decreasing times; LINEAR interpolation only). Also
+// a fuzz target.
 [[nodiscard]] Result<SkinnedMeshData> load_gltf_skinned(const void* bytes,
                                                         std::size_t size) noexcept;
 

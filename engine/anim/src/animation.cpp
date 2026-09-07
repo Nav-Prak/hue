@@ -410,11 +410,9 @@ Result<void> Animator::play_blend(std::uint32_t lower_clip, std::uint32_t upper_
         fade_seconds < 0.0f) {
         return ErrorCode::kInvalidArgument;
     }
-    // One shared phase drives both gaits, so their durations must agree.
     const float lower_duration = m_data->clips[lower_clip].duration;
     const float upper_duration = m_data->clips[upper_clip].duration;
-    if (lower_duration <= 0.0f ||
-        std::fabs(lower_duration - upper_duration) > 1.0e-4f) {
+    if (lower_duration <= 0.0f || upper_duration <= 0.0f) {
         return ErrorCode::kInvalidArgument;
     }
     if (m_current.blended && m_current.lower == lower_clip && m_current.upper == upper_clip) {

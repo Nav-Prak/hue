@@ -170,7 +170,7 @@ TEST_CASE("animator: 1D blend mixes clips by parameter and fires dominant-side e
     CHECK(low.value().fired_event_count == 0);
 }
 
-TEST_CASE("animator: blend validation rejects mismatched durations and bad ranges") {
+TEST_CASE("animator: blend validation rejects bad ranges, allows mismatched durations") {
     auto data = make_test_character();
 
     hue::asset::AnimationClip slow;
@@ -188,7 +188,7 @@ TEST_CASE("animator: blend validation rejects mismatched durations and bad range
 
     hue::anim::Animator animator;
     REQUIRE(animator.bind(data));
-    CHECK_FALSE(animator.play_blend(0, 2, 0.0f, 4.0f)); // mismatched durations
+    REQUIRE(animator.play_blend(0, 2, 0.0f, 4.0f)); // imported walk/run often differ
     CHECK_FALSE(animator.play_blend(0, 0, 0.0f, 4.0f)); // same clip twice
     CHECK_FALSE(animator.play_blend(0, 1, 4.0f, 0.0f)); // inverted interval
     CHECK_FALSE(animator.play_blend(0, 9, 0.0f, 4.0f)); // out of range clip
