@@ -143,7 +143,7 @@ graphics_pipeline_create(const ContextState& context, const char* shader_directo
                          const char* vert_name, const char* frag_name, VkPipelineLayout layout,
                          VkFormat color_format, VkFormat depth_format,
                          const VkPipelineVertexInputStateCreateInfo& vertex_input,
-                         bool depth_test) {
+                         bool depth_test, bool alpha_blend = false, bool cull_none = false) {
     auto vertex_module = shader_module_create(context, shader_directory, vert_name);
     if (!vertex_module) {
         return vertex_module.error();
@@ -174,7 +174,19 @@ graphics_pipeline_create(const ContextState& context, const char* shader_directo
     stages[1].module = guard.fragment;
     stages[1].pName = "main";
 
-    const FixedFunction fixed;
+    FixedFunction fixed;
+    if (cull_none) {
+        fixed.rasterization.cullMode = VK_CULL_MODE_NONE;
+    }
+    if (alpha_blend) {
+        fixed.blend_attachment.blendEnable = VK_TRUE;
+        fixed.blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        fixed.blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        fixed.blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+        fixed.blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        fixed.blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        fixed.blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
 
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
     depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -323,9 +335,32 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
         return skinned.error();
     }
 
+    if (pipeline.hud_layout == VK_NULL_HANDLE) {
+        VkPushConstantRange push_range{};
+        push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        push_range.size = sizeof(HudPushConstants);
+        VkPipelineLayoutCreateInfo layout_info{};
+        layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout_info.pushConstantRangeCount = 1;
+        layout_info.pPushConstantRanges = &push_range;
+        HUE_VK_TRY(vkCreatePipelineLayout(context.device, &layout_info, nullptr,
+                                          &pipeline.hud_layout));
+    }
+
+    auto hud = graphics_pipeline_create(context, shader_directory, "hud.vert.spv",
+                                        "hud.frag.spv", pipeline.hud_layout, color_format,
+                                        depth_format, empty_input, false, true, true);
+    if (!hud) {
+        vkDestroyPipeline(context.device, triangle.value(), nullptr);
+        vkDestroyPipeline(context.device, mesh.value(), nullptr);
+        vkDestroyPipeline(context.device, skinned.value(), nullptr);
+        return hud.error();
+    }
+
     pipeline.triangle = triangle.value();
     pipeline.mesh = mesh.value();
     pipeline.skinned_mesh = skinned.value();
+    pipeline.hud = hud.value();
     return {};
 }
 
@@ -342,6 +377,10 @@ void pipeline_destroy(PipelineState& pipeline, const ContextState& context) {
         vkDestroyPipeline(context.device, pipeline.skinned_mesh, nullptr);
         pipeline.skinned_mesh = VK_NULL_HANDLE;
     }
+    if (pipeline.hud != VK_NULL_HANDLE) {
+        vkDestroyPipeline(context.device, pipeline.hud, nullptr);
+        pipeline.hud = VK_NULL_HANDLE;
+    }
     if (pipeline.triangle_layout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(context.device, pipeline.triangle_layout, nullptr);
         pipeline.triangle_layout = VK_NULL_HANDLE;
@@ -349,6 +388,10 @@ void pipeline_destroy(PipelineState& pipeline, const ContextState& context) {
     if (pipeline.mesh_layout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(context.device, pipeline.mesh_layout, nullptr);
         pipeline.mesh_layout = VK_NULL_HANDLE;
+    }
+    if (pipeline.hud_layout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(context.device, pipeline.hud_layout, nullptr);
+        pipeline.hud_layout = VK_NULL_HANDLE;
     }
 }
 

@@ -360,6 +360,40 @@ cook_static_collision(const hue::asset::StaticMeshData& data, const hue::Mat4& w
     return normalize(direction) * speed;
 }
 
+void append_hud_quad(hue::HudQuad* quads, std::uint32_t& count, hue::Vec2 min, hue::Vec2 max,
+                     hue::Vec4 color) {
+    if (count >= hue::kMaxHudQuads) {
+        return;
+    }
+    quads[count++] = {min, max, color};
+}
+
+void append_health_bar(hue::HudQuad* quads, std::uint32_t& count, float x0, float y0, float x1,
+                       float y1, float ratio, hue::Vec4 fill) {
+    ratio = hue::clamp(ratio, 0.0f, 1.0f);
+    append_hud_quad(quads, count, {x0, y0}, {x1, y1}, {0.04f, 0.04f, 0.055f, 0.82f});
+    const float inset = (y1 - y0) * 0.22f;
+    const float inner_x0 = x0 + inset;
+    const float inner_x1 = x1 - inset;
+    const float inner_y0 = y0 + inset;
+    const float inner_y1 = y1 - inset;
+    if (ratio > 0.001f && inner_x1 > inner_x0) {
+        append_hud_quad(quads, count, {inner_x0, inner_y0},
+                        {inner_x0 + (inner_x1 - inner_x0) * ratio, inner_y1}, fill);
+    }
+}
+
+[[nodiscard]] bool world_to_ndc(const hue::Camera& camera, hue::Vec3 world, hue::Vec2& ndc) {
+    const hue::Vec4 clip =
+        camera.view_projection() * hue::Vec4{world.x, world.y, world.z, 1.0f};
+    if (!(clip.w > 0.05f) || !std::isfinite(clip.w)) {
+        return false;
+    }
+    ndc.x = clip.x / clip.w;
+    ndc.y = clip.y / clip.w;
+    return std::isfinite(ndc.x) && std::isfinite(ndc.y);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -675,6 +709,7 @@ int main(int argc, char** argv) {
     // Scripted enemy pressure until Week 11 AI: alternate light/heavy swings.
     float enemy_action_timer = 2.0f;
     bool enemy_heavy_next = false;
+    bool strike_consumed[2] = {};
 
     while (!window.value().should_close()) {
         HUE_PROFILE_ZONE("game::frame");
@@ -862,6 +897,40 @@ int main(int argc, char** argv) {
                 player_previous_state = state;
             }
 
+            // Crude Week-10-preview melee: one hit per swing while the
+            // attack's hitbox event is live and the defender is in range.
+            const auto try_strike = [&](int attacker, int defender, std::uint32_t attacker_body,
+                                        std::uint32_t defender_body) {
+                if (!combat_characters[attacker] || !combat_characters[defender]) {
+                    return;
+                }
+                if (!combat_characters[attacker]->hitbox_active()) {
+                    strike_consumed[attacker] = false;
+                    return;
+                }
+                if (strike_consumed[attacker] || !combat_characters[defender]->alive() ||
+                    combat_characters[defender]->invulnerable()) {
+                    return;
+                }
+                const hue::Vec3 from = physics.value().character_position(attacker_body);
+                const hue::Vec3 to = physics.value().character_position(defender_body);
+                const hue::Vec3 delta{to.x - from.x, 0.0f, to.z - from.z};
+                // Spawn is 3 m center-to-center; keep this a bit longer so
+                // a swing at the opening positions still connects.
+                constexpr float kStrikeRange = 3.4f;
+                if (length_squared(delta) > kStrikeRange * kStrikeRange) {
+                    return;
+                }
+                const float damage = combat_characters[attacker]->state() ==
+                                             hue::combat::State::kAttackHeavy
+                                         ? 28.0f
+                                         : 14.0f;
+                combat_characters[defender]->apply_damage(damage);
+                strike_consumed[attacker] = true;
+            };
+            try_strike(0, 1, player_body.value(), enemy_body.value());
+            try_strike(1, 0, enemy_body.value(), player_body.value());
+
             if (const auto flushed = world.flush(); !flushed) {
                 HUE_LOG_ERROR("ecs flush failed");
                 return 1;
@@ -899,7 +968,52 @@ int main(int argc, char** argv) {
             const hue::Camera camera = use_fly_camera ? fly_camera.camera(aspect)
                                                       : follow_camera.camera(aspect);
 
-            const auto drawn = renderer.value().draw_frame(camera, draws, draw_count);
+            hue::HudQuad hud[hue::kMaxHudQuads];
+            std::uint32_t hud_count = 0;
+            const float ratio_player =
+                combat_characters[0] ? combat_characters[0]->health_ratio() : 0.0f;
+            const float ratio_enemy =
+                combat_characters[1] ? combat_characters[1]->health_ratio() : 0.0f;
+            const hue::Vec4 fill_player{0.28f, 0.86f, 0.48f, 0.94f};
+            const hue::Vec4 fill_enemy{0.90f, 0.26f, 0.32f, 0.94f};
+            append_health_bar(hud, hud_count, -0.92f, 0.84f, -0.10f, 0.94f, ratio_player,
+                              fill_player);
+            append_health_bar(hud, hud_count, 0.10f, 0.84f, 0.92f, 0.94f, ratio_enemy,
+                              fill_enemy);
+
+            const hue::RendererStatus& hud_status = render_status;
+            const float pixel_x =
+                hud_status.swapchain_width > 0
+                    ? 2.0f / static_cast<float>(hud_status.swapchain_width)
+                    : 2.0f / 1280.0f;
+            const float pixel_y =
+                hud_status.swapchain_height > 0
+                    ? 2.0f / static_cast<float>(hud_status.swapchain_height)
+                    : 2.0f / 720.0f;
+            const struct {
+                std::uint32_t body;
+                float ratio;
+                hue::Vec4 fill;
+            } overhead[2] = {
+                {player_body.value(), ratio_player, fill_player},
+                {enemy_body.value(), ratio_enemy, fill_enemy},
+            };
+            for (const auto& bar : overhead) {
+                hue::Vec2 ndc{};
+                const hue::Vec3 head =
+                    physics.value().character_position(bar.body) + hue::Vec3{0.0f, 1.92f, 0.0f};
+                if (!world_to_ndc(camera, head, ndc)) {
+                    continue;
+                }
+                const float half_w = 60.0f * pixel_x;
+                const float height = 14.0f * pixel_y;
+                append_health_bar(hud, hud_count, ndc.x - half_w, ndc.y + 10.0f * pixel_y,
+                                  ndc.x + half_w, ndc.y + 10.0f * pixel_y + height, bar.ratio,
+                                  bar.fill);
+            }
+
+            const auto drawn =
+                renderer.value().draw_frame(camera, draws, draw_count, hud, hud_count);
             if (!drawn) {
                 HUE_LOG_ERROR("draw_frame failed; rendering disabled for this run");
                 renderer_active = false;

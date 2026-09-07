@@ -51,6 +51,15 @@ struct MeshDraw {
 // point lights). radius bounds the falloff window; intensity scales the
 // linear-space color.
 inline constexpr std::uint32_t kMaxPointLights = 4;
+inline constexpr std::uint32_t kMaxHudQuads = 32;
+
+// Screen-space colored rectangle in engine NDC (Y-up, matching the
+// negative-viewport 3D pass). Drawn after meshes with depth off.
+struct HudQuad {
+    Vec2 ndc_min{};
+    Vec2 ndc_max{};
+    Vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
+};
 
 struct PointLight {
     Vec3 position{};
@@ -88,7 +97,9 @@ public:
     // still proves the swapchain works. Swapchain recreation on resize/
     // out-of-date is handled internally; a minimized window is a no-op.
     [[nodiscard]] Result<void> draw_frame(const Camera& camera, const MeshDraw* draws,
-                                          std::uint32_t draw_count);
+                                          std::uint32_t draw_count,
+                                          const HudQuad* hud = nullptr,
+                                          std::uint32_t hud_count = 0);
     [[nodiscard]] Result<void> draw_frame(); // identity camera, empty list
 
     // Runtime recompile hook: reloads .spv files from the shader directory

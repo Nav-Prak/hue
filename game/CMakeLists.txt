@@ -24,6 +24,8 @@ hue_target_shaders(hue_game
     ${CMAKE_SOURCE_DIR}/assets/shaders/mesh.vert
     ${CMAKE_SOURCE_DIR}/assets/shaders/skinned_mesh.vert
     ${CMAKE_SOURCE_DIR}/assets/shaders/mesh.frag
+    ${CMAKE_SOURCE_DIR}/assets/shaders/hud.vert
+    ${CMAKE_SOURCE_DIR}/assets/shaders/hud.frag
 )
 
 # Character GLBs stage next to the executable, mirroring shaders.

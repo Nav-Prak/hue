@@ -78,6 +78,9 @@ struct PipelineState {
     VkPipelineLayout mesh_layout = VK_NULL_HANDLE;
     VkPipeline mesh = VK_NULL_HANDLE;
     VkPipeline skinned_mesh = VK_NULL_HANDLE;
+    // Screen-space HUD quads (health bars): no vertex buffers, depth off.
+    VkPipelineLayout hud_layout = VK_NULL_HANDLE;
+    VkPipeline hud = VK_NULL_HANDLE;
 };
 
 struct BufferAllocation {
@@ -173,7 +176,17 @@ struct MeshPushConstants {
     std::uint32_t skin_offset = 0; // index of the draw's first joint matrix
     std::uint32_t padding[3] = {};
 };
-static_assert(sizeof(MeshPushConstants) == 112);
+struct HudPushConstants {
+    float ndc_min_x = 0.0f;
+    float ndc_min_y = 0.0f;
+    float ndc_max_x = 0.0f;
+    float ndc_max_y = 0.0f;
+    float r = 1.0f;
+    float g = 1.0f;
+    float b = 1.0f;
+    float a = 1.0f;
+};
+static_assert(sizeof(HudPushConstants) == 32);
 
 // context.cpp
 Result<void> context_create(ContextState& context, GLFWwindow* window, bool enable_validation);

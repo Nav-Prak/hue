@@ -216,7 +216,8 @@ void state_destroy(Renderer::State& state) {
 [[nodiscard]] Result<void> record_frame(Renderer::State& state, VkCommandBuffer cmd,
                                         std::uint32_t image_index, std::uint32_t frame,
                                         const Camera& camera, const MeshDraw* draws,
-                                        std::uint32_t draw_count) {
+                                        std::uint32_t draw_count, const HudQuad* hud,
+                                        std::uint32_t hud_count) {
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -423,6 +424,26 @@ void state_destroy(Renderer::State& state) {
             ++drawn;
         }
     }
+
+    if (hud != nullptr && hud_count > 0 && state.pipeline.hud != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline.hud);
+        const std::uint32_t count = hud_count > kMaxHudQuads ? kMaxHudQuads : hud_count;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            HudPushConstants push;
+            push.ndc_min_x = hud[i].ndc_min.x;
+            push.ndc_min_y = hud[i].ndc_min.y;
+            push.ndc_max_x = hud[i].ndc_max.x;
+            push.ndc_max_y = hud[i].ndc_max.y;
+            push.r = hud[i].color.x;
+            push.g = hud[i].color.y;
+            push.b = hud[i].color.z;
+            push.a = hud[i].color.w;
+            vkCmdPushConstants(cmd, state.pipeline.hud_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(push), &push);
+            vkCmdDraw(cmd, 6, 1, 0, 0);
+        }
+    }
+
     state.status.last_draws = drawn;
     state.status.last_culled = culled;
 
@@ -555,11 +576,12 @@ void Renderer::set_point_lights(const PointLight* lights, std::uint32_t count) {
 }
 
 Result<void> Renderer::draw_frame() {
-    return draw_frame(Camera{}, nullptr, 0);
+    return draw_frame(Camera{}, nullptr, 0, nullptr, 0);
 }
 
 Result<void> Renderer::draw_frame(const Camera& camera, const MeshDraw* draws,
-                                  std::uint32_t draw_count) {
+                                  std::uint32_t draw_count, const HudQuad* hud,
+                                  std::uint32_t hud_count) {
     HUE_PROFILE_ZONE("Renderer::draw_frame");
     State& state = *m_state;
 
@@ -601,7 +623,7 @@ Result<void> Renderer::draw_frame(const Camera& camera, const MeshDraw* draws,
     VkCommandBuffer cmd = state.command_buffers[frame];
     HUE_VK_TRY(vkResetCommandBuffer(cmd, 0));
     const auto recorded = record_frame(state, cmd, image_index, frame, camera, draws,
-                                       draw_count);
+                                       draw_count, hud, hud_count);
     if (!recorded) {
         return recorded.error();
     }
