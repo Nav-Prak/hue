@@ -151,3 +151,24 @@ TEST_CASE("physics: invalid arguments are rejected") {
     CHECK_FALSE(world.value().create_character(bad));
     CHECK_FALSE(world.value().update(0.0f));
 }
+
+TEST_CASE("physics: combat capsule and sphere overlap queries") {
+    auto world = hue::physics::PhysicsWorld::create();
+    REQUIRE(world);
+
+    const hue::Mat4 identity = hue::Mat4::identity();
+    CHECK(world.value().overlap_capsules(identity, 0.5f, 0.2f, identity, 0.5f, 0.2f));
+
+    const hue::Mat4 far = hue::Mat4::trs({3.0f, 0.0f, 0.0f}, {}, {1.0f, 1.0f, 1.0f});
+    CHECK_FALSE(world.value().overlap_capsules(identity, 0.3f, 0.15f, far, 0.3f, 0.15f));
+
+    CHECK(world.value().overlap_capsule_sphere(identity, 0.25f, 0.2f, {0.3f, 0.0f, 0.0f}, 0.2f));
+    CHECK_FALSE(
+        world.value().overlap_capsule_sphere(identity, 0.25f, 0.2f, {4.0f, 0.0f, 0.0f}, 0.2f));
+
+    CHECK(world.value().overlap_spheres({0.0f, 1.0f, 0.0f}, 0.5f, {0.4f, 1.0f, 0.0f}, 0.3f));
+    CHECK_FALSE(world.value().overlap_spheres({0.0f, 0.0f, 0.0f}, 0.2f, {5.0f, 0.0f, 0.0f}, 0.2f));
+
+    CHECK_FALSE(world.value().overlap_spheres({0.0f, 0.0f, 0.0f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.2f));
+    CHECK_FALSE(world.value().overlap_capsules(identity, 0.2f, 99.0f, identity, 0.2f, 0.2f));
+}

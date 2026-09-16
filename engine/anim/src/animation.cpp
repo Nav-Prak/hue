@@ -293,6 +293,14 @@ std::int32_t find_clip(const asset::SkinnedMeshData& data, const char* name) noe
     return -1;
 }
 
+std::int32_t find_joint(const asset::SkinnedMeshData& data, const char* name) noexcept {
+    if (name == nullptr) return -1;
+    for (std::size_t i = 0; i < data.joints.size(); ++i) {
+        if (std::strcmp(data.joints[i].name, name) == 0) return static_cast<std::int32_t>(i);
+    }
+    return -1;
+}
+
 Result<AnimationEventTrack> parse_animation_events(const void* bytes, std::size_t size) noexcept {
     if (bytes == nullptr || size == 0 || size > kMaxEventFileBytes) {
         return ErrorCode::kCorruptData;
@@ -521,7 +529,7 @@ Result<AnimationFrame> Animator::update(float delta_seconds, LinearArena& arena,
     auto built = build_skinning_matrices(m_data->joints.data(), joint_count, pose.value().local,
                                          pose.value().global, pose.value().skinning);
     if (!built) return built.error();
-    return AnimationFrame{pose.value().skinning, joint_count, fired_count};
+    return AnimationFrame{pose.value().skinning, pose.value().global, joint_count, fired_count};
 }
 
 bool Animator::finished() const noexcept {

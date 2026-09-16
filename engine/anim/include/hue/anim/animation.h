@@ -46,6 +46,7 @@ struct AnimationEventTrack {
 
 struct AnimationFrame {
     const Mat4* skinning_matrices = nullptr;
+    const Mat4* global_matrices = nullptr; // joint world-from-model; hitboxes use this
     std::uint32_t joint_count = 0;
     std::uint32_t fired_event_count = 0;
 };
@@ -75,6 +76,8 @@ sample_blend_1d(const asset::Joint* joints, std::uint32_t joint_count,
 
 [[nodiscard]] std::int32_t find_clip(const asset::SkinnedMeshData& data,
                                      const char* name) noexcept;
+[[nodiscard]] std::int32_t find_joint(const asset::SkinnedMeshData& data,
+                                      const char* name) noexcept;
 
 [[nodiscard]] Result<AnimationEventTrack> parse_animation_events(const void* bytes,
                                                                  std::size_t size) noexcept;

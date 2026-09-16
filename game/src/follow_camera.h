@@ -19,6 +19,10 @@ public:
                 const hue::physics::PhysicsWorld& physics,
                 const hue::Vec3* lock_target = nullptr);
 
+    // Combat feel: a world-space spring impulse on the camera (hitstop
+    // shake). Damps out through the same critically-damped helper as the pivot.
+    void add_impulse(hue::Vec3 velocity) noexcept;
+
     [[nodiscard]] hue::Camera camera(float aspect) const;
     [[nodiscard]] float yaw() const { return m_yaw; }
     [[nodiscard]] hue::Vec3 position() const { return m_position; }
@@ -29,8 +33,10 @@ private:
     float m_yaw = 3.05f;    // radians around +Y; starts looking back at spawn
     float m_pitch = -0.30f; // negative looks down at the character
     float m_arm_length = 4.0f;
-    hue::Vec3 m_pivot{-1.5f, 1.5f, 3.0f};
+    hue::Vec3 m_pivot{-0.8f, 1.5f, 3.0f};
     hue::Vec3 m_pivot_velocity{};
     hue::Vec3 m_position{};
+    hue::Vec3 m_shake{};
+    hue::Vec3 m_shake_velocity{};
     bool m_pivot_initialized = false;
 };

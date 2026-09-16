@@ -134,6 +134,8 @@ TEST_CASE("animator: 1D blend mixes clips by parameter and fires dominant-side e
     animator.set_blend_parameter(2.0f);
     auto frame = animator.update(0.5f, arena.value());
     REQUIRE(frame);
+    REQUIRE(frame.value().global_matrices != nullptr);
+    REQUIRE(frame.value().skinning_matrices != nullptr);
     // Root joint (0) world translation shows up directly in its skinning
     // row: clip0 moves +x by 1.0 at t=0.5, clip1 moves +z by 2.0.
     CHECK(frame.value().skinning_matrices[0].at(0, 3) == doctest::Approx(0.5f));

@@ -251,6 +251,13 @@ constexpr float kIdleThreshold = 0.2f;
 // Adding π here turns the mesh to match movement without rebaking clips.
 constexpr float kModelYawOffset = hue::kPi;
 
+// Opening positions: 1.6 m apart, facing each other, so the handslot hitbox
+// can reach the torso hurtbox on the first swing.
+constexpr hue::Vec3 kPlayerSpawn{-0.8f, 0.0f, 3.0f};
+constexpr hue::Vec3 kEnemySpawn{0.8f, 0.0f, 3.0f};
+constexpr float kPlayerFacingDegrees = -90.0f; // +X
+constexpr float kEnemyFacingDegrees = 90.0f;   // -X
+
 // Week 9 dodge: a short burst that decays to zero over the roll. The clip
 // lasts 0.4s; the burst covers ~1.8m.
 constexpr float kDodgeSpeed = 6.0f;      // m/s at the start of the roll
@@ -512,8 +519,8 @@ int main(int argc, char** argv) {
             hue::Vec3 position;
             float facing_degrees;
         } characters[2] = {
-            {"player.glb", "player.events.json", {-1.5f, 0.0f, 3.0f}, 180.0f},
-            {"enemy.glb", "enemy.events.json", {1.5f, 0.0f, 3.0f}, 180.0f},
+            {"player.glb", "player.events.json", kPlayerSpawn, kPlayerFacingDegrees},
+            {"enemy.glb", "enemy.events.json", kEnemySpawn, kEnemyFacingDegrees},
         };
         for (std::uint32_t character_index = 0; character_index < 2; ++character_index) {
             const auto& character = characters[character_index];
@@ -576,7 +583,7 @@ int main(int argc, char** argv) {
     // --- Week 8: capsule controllers + ECS world --------------------------
 
     hue::physics::CharacterDesc player_capsule;
-    player_capsule.position = {-1.5f, 0.05f, 3.0f};
+    player_capsule.position = {kPlayerSpawn.x, 0.05f, kPlayerSpawn.z};
     const auto player_body = physics.value().create_character(player_capsule);
     if (!player_body) {
         HUE_LOG_ERROR("player capsule controller creation failed");
@@ -585,7 +592,7 @@ int main(int argc, char** argv) {
     // The enemy stands on its own capsule (grounded by the same solver);
     // it only starts steering itself when AI lands in Week 11.
     hue::physics::CharacterDesc enemy_capsule;
-    enemy_capsule.position = {1.5f, 0.05f, 3.0f};
+    enemy_capsule.position = {kEnemySpawn.x, 0.05f, kEnemySpawn.z};
     const auto enemy_body = physics.value().create_character(enemy_capsule);
     if (!enemy_body) {
         HUE_LOG_ERROR("enemy capsule controller creation failed");
@@ -616,12 +623,12 @@ int main(int argc, char** argv) {
         enemy_entity = created_enemy.value();
         bool ok =
             world.add(player_entity,
-                      TransformComponent{{-1.5f, 0.0f, 3.0f}, hue::radians(180.0f)})
+                      TransformComponent{kPlayerSpawn, hue::radians(kPlayerFacingDegrees)})
                 .has_value();
         ok = ok && world.add(player_entity, BodyComponent{player_body.value()})
                        .has_value();
         ok = ok && world.add(enemy_entity,
-                             TransformComponent{{1.5f, 0.0f, 3.0f}, hue::radians(180.0f)})
+                             TransformComponent{kEnemySpawn, hue::radians(kEnemyFacingDegrees)})
                        .has_value();
         ok = ok && world.add(enemy_entity, BodyComponent{enemy_body.value()})
                        .has_value();
@@ -710,6 +717,7 @@ int main(int argc, char** argv) {
     float enemy_action_timer = 2.0f;
     bool enemy_heavy_next = false;
     bool strike_consumed[2] = {};
+    float hitstop_remaining = 0.0f;
 
     while (!window.value().should_close()) {
         HUE_PROFILE_ZONE("game::frame");
@@ -789,6 +797,11 @@ int main(int argc, char** argv) {
         for (int s = 0; s < steps; ++s) {
             constexpr float kTick = static_cast<float>(hue::FixedTimestep::kTickSeconds);
             log_input_edges(input); // input edges logged per sim tick
+
+            if (hitstop_remaining > 0.0f) {
+                hitstop_remaining -= kTick;
+                continue;
+            }
 
             // Scripted enemy pressure until Week 11 AI: a swing every 3s,
             // alternating light and heavy so both cancel tables run live.
@@ -897,10 +910,21 @@ int main(int argc, char** argv) {
                 player_previous_state = state;
             }
 
-            // Crude Week-10-preview melee: one hit per swing while the
-            // attack's hitbox event is live and the defender is in range.
-            const auto try_strike = [&](int attacker, int defender, std::uint32_t attacker_body,
-                                        std::uint32_t defender_body) {
+            // Week 10 melee: joint-attached hitbox vs hurtbox overlap
+            // through Jolt, one successful hit per hitbox activation.
+            const auto model_of = [&](hue::ecs::Entity entity) -> hue::Mat4 {
+                const TransformComponent* transform = transform_pool.value()->get(entity);
+                if (transform == nullptr) {
+                    return hue::Mat4::identity();
+                }
+                return hue::Mat4::trs(
+                    transform->position,
+                    hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
+                                               transform->yaw + kModelYawOffset),
+                    {1.0f, 1.0f, 1.0f});
+            };
+            const auto try_strike = [&](int attacker, int defender, hue::ecs::Entity attacker_entity,
+                                        hue::ecs::Entity defender_entity) {
                 if (!combat_characters[attacker] || !combat_characters[defender]) {
                     return;
                 }
@@ -912,24 +936,43 @@ int main(int argc, char** argv) {
                     combat_characters[defender]->invulnerable()) {
                     return;
                 }
-                const hue::Vec3 from = physics.value().character_position(attacker_body);
-                const hue::Vec3 to = physics.value().character_position(defender_body);
-                const hue::Vec3 delta{to.x - from.x, 0.0f, to.z - from.z};
-                // Spawn is 3 m center-to-center; keep this a bit longer so
-                // a swing at the opening positions still connects.
-                constexpr float kStrikeRange = 3.4f;
-                if (length_squared(delta) > kStrikeRange * kStrikeRange) {
+                if (!combat_characters[attacker]->hitbox_overlaps(
+                        model_of(attacker_entity), *combat_characters[defender],
+                        model_of(defender_entity), physics.value())) {
                     return;
                 }
-                const float damage = combat_characters[attacker]->state() ==
-                                             hue::combat::State::kAttackHeavy
-                                         ? 28.0f
-                                         : 14.0f;
-                combat_characters[defender]->apply_damage(damage);
+                const hue::combat::Strike strike =
+                    combat_characters[attacker]->state() == hue::combat::State::kAttackHeavy
+                        ? hue::combat::kStrikeHeavy
+                        : hue::combat::kStrikeLight;
+                const hue::combat::StrikeContact contact =
+                    combat_characters[defender]->apply_strike(strike);
+                if (!contact.landed) {
+                    return;
+                }
                 strike_consumed[attacker] = true;
+                HUE_LOG_INFO("hit landed: %s -> %s (hp %.0f, stagger %d, fatal %d)",
+                             attacker == 0 ? "player" : "enemy",
+                             defender == 0 ? "player" : "enemy",
+                             static_cast<double>(combat_characters[defender]->health()),
+                             contact.staggered ? 1 : 0, contact.fatal ? 1 : 0);
+                if (contact.hitstop_seconds > hitstop_remaining) {
+                    hitstop_remaining = contact.hitstop_seconds;
+                }
+                if (contact.shake > 0.0f) {
+                    const hue::Vec3 attacker_feet = physics.value().character_position(
+                        attacker == 0 ? player_body.value() : enemy_body.value());
+                    const hue::Vec3 defender_feet = physics.value().character_position(
+                        defender == 0 ? player_body.value() : enemy_body.value());
+                    hue::Vec3 dir{defender_feet.x - attacker_feet.x, 0.25f,
+                                  defender_feet.z - attacker_feet.z};
+                    if (length_squared(dir) > 0.0001f) {
+                        follow_camera.add_impulse(normalize(dir) * (contact.shake * 6.0f));
+                    }
+                }
             };
-            try_strike(0, 1, player_body.value(), enemy_body.value());
-            try_strike(1, 0, enemy_body.value(), player_body.value());
+            try_strike(0, 1, player_entity, enemy_entity);
+            try_strike(1, 0, enemy_entity, player_entity);
 
             if (const auto flushed = world.flush(); !flushed) {
                 HUE_LOG_ERROR("ecs flush failed");

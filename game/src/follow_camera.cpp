@@ -21,6 +21,7 @@ constexpr float kFovYRadians = hue::radians(55.0f);
 constexpr float kNearPlane = 0.1f;
 constexpr float kFarPlane = 200.0f;
 constexpr float kLockYawOmega = 6.0f; // lock-on bias stiffness
+constexpr float kShakeOmega = 18.0f;
 
 [[nodiscard]] float wrap_pi(float radians_in) noexcept {
     while (radians_in > hue::kPi) radians_in -= hue::kTwoPi;
@@ -79,6 +80,20 @@ void FollowCamera::update(const hue::Input& input, float dt, hue::Vec3 target_fe
     m_arm_length = damp(m_arm_length, allowed_arm, omega, dt);
 
     m_position = m_pivot + back * m_arm_length;
+    spring_damp(m_shake, m_shake_velocity, hue::Vec3{}, kShakeOmega, dt);
+    m_position = m_position + m_shake;
+}
+
+void FollowCamera::add_impulse(hue::Vec3 velocity) noexcept {
+    if (!std::isfinite(velocity.x) || !std::isfinite(velocity.y) || !std::isfinite(velocity.z)) {
+        return;
+    }
+    const float speed_sq = length_squared(velocity);
+    constexpr float kMaxImpulse = 8.0f;
+    if (speed_sq > kMaxImpulse * kMaxImpulse) {
+        velocity = normalize(velocity) * kMaxImpulse;
+    }
+    m_shake_velocity = m_shake_velocity + velocity;
 }
 
 hue::Camera FollowCamera::camera(float aspect) const {

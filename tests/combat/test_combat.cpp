@@ -169,3 +169,22 @@ TEST_CASE("combat: event flags reset on every state change") {
     machine.handle_event("iframe_begin");
     CHECK_FALSE(machine.invulnerable());
 }
+
+TEST_CASE("combat: bind_volumes uses the first matching joint alias") {
+    const char* joints[] = {"hips", "head", "hand_r"};
+    hue::combat::BoundVolumeSet hitboxes;
+    CHECK(hue::combat::bind_volumes(hue::combat::kDefaultHitboxes, hue::combat::kDefaultHitboxCount,
+                                    joints, 3, hitboxes) == 1);
+    CHECK(hitboxes.items[0].joint == 2); // hand_r, the generated-tube alias
+
+    hue::combat::BoundVolumeSet hurtboxes;
+    CHECK(hue::combat::bind_volumes(hue::combat::kDefaultHurtboxes,
+                                    hue::combat::kDefaultHurtboxCount, joints, 3, hurtboxes) == 2);
+    CHECK(hurtboxes.items[0].joint == 1); // head
+    CHECK(hurtboxes.items[1].joint == 0); // hips (chest/spine missing)
+
+    hue::combat::BoundVolumeSet empty;
+    const char* none[] = {"root"};
+    CHECK(hue::combat::bind_volumes(hue::combat::kDefaultHitboxes, hue::combat::kDefaultHitboxCount,
+                                    none, 1, empty) == 0);
+}

@@ -138,6 +138,24 @@ Defenses:
 Capsule controllers and raycasts only consume engine-generated parameters
 (validated at the facade), not asset data.
 
+### Combat overlap queries (Week 10)
+
+Hitboxes and hurtboxes are engine-authored capsules/spheres attached to
+already-imported joints. They are **not** cooked from mesh triangles.
+
+Defenses:
+
+1. **Bounded extents** — radius and capsule half-height must be finite,
+   positive (radius), and ≤ `kMaxCombatShapeExtent` (8 m). Oversized or
+   NaN arguments miss instead of creating a Jolt shape that could hang
+   narrow-phase.
+2. **Finite transforms** — every matrix/center handed to
+   `overlap_capsules` / `overlap_capsule_sphere` / `overlap_spheres` is
+   checked finite before `CollisionDispatch`.
+3. **Joint bind is name lookup** — unknown aliases are skipped; a
+   character with zero hitboxes or hurtboxes fails initialize rather than
+   querying joint index `-1`.
+
 ## Local debug surfaces
 
 | Surface | Binding | Guards |

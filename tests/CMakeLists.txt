@@ -12,6 +12,7 @@ add_executable(hue_tests
     main.cpp
     anim/test_animation.cpp
     combat/test_combat.cpp
+    combat/test_hit_volumes.cpp
     ecs/test_ecs.cpp
     physics/test_physics.cpp
     core/bench_math.cpp

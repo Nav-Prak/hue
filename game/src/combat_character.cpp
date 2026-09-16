@@ -2,6 +2,7 @@
 
 #include "combat_character.h"
 
+#include "hue/asset/gltf_loader.h"
 #include "hue/core/log.h"
 
 #include <cstring>
@@ -13,6 +14,43 @@ namespace {
 constexpr float kWalkSpeed = 1.6f;
 constexpr float kRunSpeed = 4.0f;
 constexpr float kIdleThreshold = 0.2f;
+constexpr float kPoiseRegenDelay = 1.0f;
+constexpr float kPoiseRegenPerSecond = 18.0f;
+
+[[nodiscard]] hue::Mat4 volume_world(const hue::Mat4& model, const hue::Mat4* globals,
+                                     std::uint32_t joint_count,
+                                     const hue::combat::BoundVolume& volume) noexcept {
+    if (globals == nullptr || volume.joint < 0 ||
+        static_cast<std::uint32_t>(volume.joint) >= joint_count) {
+        return hue::Mat4::identity();
+    }
+    return model * globals[volume.joint] *
+           hue::Mat4::trs(volume.local_offset, {}, {1.0f, 1.0f, 1.0f});
+}
+
+[[nodiscard]] bool volumes_overlap(const hue::combat::BoundVolume& hit, const hue::Mat4& hit_world,
+                                   const hue::combat::BoundVolume& hurt,
+                                   const hue::Mat4& hurt_world,
+                                   hue::physics::PhysicsWorld& physics) noexcept {
+    using hue::combat::VolumeKind;
+    const bool hit_sphere = hit.kind == VolumeKind::kSphere || hit.half_height <= 1.0e-4f;
+    const bool hurt_sphere = hurt.kind == VolumeKind::kSphere || hurt.half_height <= 1.0e-4f;
+    const hue::Vec3 hit_center{hit_world.m[12], hit_world.m[13], hit_world.m[14]};
+    const hue::Vec3 hurt_center{hurt_world.m[12], hurt_world.m[13], hurt_world.m[14]};
+    if (hit_sphere && hurt_sphere) {
+        return physics.overlap_spheres(hit_center, hit.radius, hurt_center, hurt.radius);
+    }
+    if (hit_sphere) {
+        return physics.overlap_capsule_sphere(hurt_world, hurt.half_height, hurt.radius,
+                                              hit_center, hit.radius);
+    }
+    if (hurt_sphere) {
+        return physics.overlap_capsule_sphere(hit_world, hit.half_height, hit.radius, hurt_center,
+                                              hurt.radius);
+    }
+    return physics.overlap_capsules(hit_world, hit.half_height, hit.radius, hurt_world,
+                                    hurt.half_height, hurt.radius);
+}
 
 } // namespace
 
@@ -39,19 +77,61 @@ hue::Result<void> CombatCharacter::initialize() {
         }
         *binding.slot = static_cast<std::uint32_t>(clip);
     }
+
+    const char* joint_names[hue::asset::kGltfMaxJoints] = {};
+    const std::uint32_t joint_count = static_cast<std::uint32_t>(m_data.joints.size());
+    for (std::uint32_t i = 0; i < joint_count && i < hue::asset::kGltfMaxJoints; ++i) {
+        joint_names[i] = m_data.joints[i].name;
+    }
+    hue::combat::bind_volumes(hue::combat::kDefaultHitboxes, hue::combat::kDefaultHitboxCount,
+                              joint_names, joint_count, m_hitboxes);
+    hue::combat::bind_volumes(hue::combat::kDefaultHurtboxes, hue::combat::kDefaultHurtboxCount,
+                              joint_names, joint_count, m_hurtboxes);
+    if (m_hitboxes.count == 0 || m_hurtboxes.count == 0) {
+        HUE_LOG_ERROR("character is missing combat joints (hitboxes=%u hurtboxes=%u)",
+                      m_hitboxes.count, m_hurtboxes.count);
+        return hue::ErrorCode::kCorruptData;
+    }
+
     return m_animator.bind(m_data, m_idle_clip);
 }
 
 void CombatCharacter::apply_damage(float amount) noexcept {
-    if (amount <= 0.0f || m_health <= 0.0f || m_machine.invulnerable() ||
+    hue::combat::Strike strike;
+    strike.health = amount;
+    strike.poise = m_max_poise + 1.0f;
+    strike.hitstop_seconds = 0.0f;
+    strike.shake = 0.0f;
+    (void)apply_strike(strike);
+}
+
+hue::combat::StrikeContact CombatCharacter::apply_strike(const hue::combat::Strike& strike) noexcept {
+    hue::combat::StrikeContact contact;
+    if (strike.health <= 0.0f || m_health <= 0.0f || m_machine.invulnerable() ||
         m_machine.state() == hue::combat::State::kDeath) {
-        return;
+        return contact;
     }
-    m_health -= amount;
+    m_health -= strike.health;
     if (m_health < 0.0f) {
         m_health = 0.0f;
     }
-    notify_hit(m_health <= 0.0f);
+    m_poise -= strike.poise;
+    m_poise_regen_delay = kPoiseRegenDelay;
+    contact.landed = true;
+    contact.fatal = m_health <= 0.0f;
+    contact.staggered = contact.fatal || m_poise <= 0.0f;
+    contact.hitstop_seconds = strike.hitstop_seconds;
+    contact.shake = strike.shake;
+    if (m_poise < 0.0f) {
+        m_poise = 0.0f;
+    }
+    if (contact.staggered) {
+        notify_hit(contact.fatal);
+        if (!contact.fatal) {
+            m_poise = m_max_poise; // stagger resets poise so the next string can chip
+        }
+    }
+    return contact;
 }
 
 hue::Result<void> CombatCharacter::start_state_clip(hue::combat::State state) {
@@ -77,6 +157,15 @@ hue::Result<void> CombatCharacter::start_state_clip(hue::combat::State state) {
 hue::Result<void> CombatCharacter::update(float delta_seconds, hue::LinearArena& arena,
                                           hue::MeshDraw* draws) {
     using hue::combat::State;
+
+    if (m_poise_regen_delay > 0.0f) {
+        m_poise_regen_delay -= delta_seconds;
+    } else if (m_poise < m_max_poise && m_health > 0.0f) {
+        m_poise += kPoiseRegenPerSecond * delta_seconds;
+        if (m_poise > m_max_poise) {
+            m_poise = m_max_poise;
+        }
+    }
 
     hue::combat::TickFlags flags;
     flags.clip_finished = m_machine.state() != State::kLocomotion && m_animator.finished();
@@ -128,5 +217,28 @@ hue::Result<void> CombatCharacter::update(float delta_seconds, hue::LinearArena&
     draws[m_draw_index].mesh = m_mesh;
     draws[m_draw_index].joint_matrices = frame.value().skinning_matrices;
     draws[m_draw_index].joint_count = frame.value().joint_count;
+    m_globals = frame.value().global_matrices;
+    m_joint_count = frame.value().joint_count;
     return {};
+}
+
+bool CombatCharacter::hitbox_overlaps(const hue::Mat4& self_model, const CombatCharacter& other,
+                                      const hue::Mat4& other_model,
+                                      hue::physics::PhysicsWorld& physics) const noexcept {
+    if (m_globals == nullptr || other.m_globals == nullptr) {
+        return false;
+    }
+    for (std::uint32_t i = 0; i < m_hitboxes.count; ++i) {
+        const hue::combat::BoundVolume& hit = m_hitboxes.items[i];
+        const hue::Mat4 hit_world = volume_world(self_model, m_globals, m_joint_count, hit);
+        for (std::uint32_t j = 0; j < other.m_hurtboxes.count; ++j) {
+            const hue::combat::BoundVolume& hurt = other.m_hurtboxes.items[j];
+            const hue::Mat4 hurt_world =
+                volume_world(other_model, other.m_globals, other.m_joint_count, hurt);
+            if (volumes_overlap(hit, hit_world, hurt, hurt_world, physics)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }

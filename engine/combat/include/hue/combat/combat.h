@@ -1,11 +1,11 @@
 // engine/combat/include/hue/combat/combat.h
 //
-// Week 9 gameplay combat state machine. Pure logic, no allocation: the
-// owner drives it with buffered input actions, per-tick flags (one-shot
-// finished, hit taken), and the anim events fired by the runtime
-// (cancel_open/cancel_close, hit_begin/hit_end, iframe_begin/iframe_end).
-// The machine answers with the current state; the owner maps states to
-// animation clips, movement rules, and (Week 10) hitbox activation.
+// Week 9 gameplay combat state machine plus Week 10 strike/volume tables.
+// Pure logic, no allocation: the owner drives it with buffered input,
+// per-tick flags (one-shot finished, hit taken), and the anim events fired
+// by the runtime (cancel_open/cancel_close, hit_begin/hit_end,
+// iframe_begin/iframe_end). Joint-local hitbox/hurtbox defs bind by name;
+// overlap happens through the physics facade.
 //
 // State/cancel rules:
 //   locomotion  -> any buffered action starts immediately
@@ -22,6 +22,8 @@
 // moment a cancel window or state end allows it.
 
 #pragma once
+
+#include "hue/core/math.h"
 
 #include <cstdint>
 
@@ -46,6 +48,92 @@ enum class Action : std::uint8_t {
 struct Tuning {
     float input_buffer_seconds = 0.35f;
 };
+
+// Health + poise delivered by one successful overlap. Poise at or below
+// zero (or a fatal health drop) staggers; otherwise the victim keeps their
+// current state and only the health bar moves.
+struct Strike {
+    float health = 14.0f;
+    float poise = 22.0f;
+    float hitstop_seconds = 0.055f;
+    float shake = 0.10f;
+};
+
+inline constexpr Strike kStrikeLight{14.0f, 22.0f, 0.055f, 0.10f};
+inline constexpr Strike kStrikeHeavy{28.0f, 45.0f, 0.090f, 0.18f};
+
+struct StrikeContact {
+    bool landed = false;
+    bool staggered = false;
+    bool fatal = false;
+    float hitstop_seconds = 0.0f;
+    float shake = 0.0f;
+};
+
+inline constexpr std::uint32_t kMaxBoundVolumes = 8;
+inline constexpr std::uint32_t kMaxJointAliases = 4;
+
+enum class VolumeKind : std::uint8_t { kSphere, kCapsule };
+
+// Joint-local combat volume. Capsules lie on the joint's +Y (KayKit
+// weapons bake along handslot.r +Y). Aliases let one def bind on both
+// KayKit (`handslot.r`) and the generated tube fixture (`hand_r`).
+struct VolumeDef {
+    const char* joint_aliases[kMaxJointAliases] = {};
+    VolumeKind kind = VolumeKind::kSphere;
+    Vec3 local_offset{};
+    float radius = 0.2f;
+    float half_height = 0.0f;
+};
+
+struct BoundVolume {
+    std::int32_t joint = -1;
+    VolumeKind kind = VolumeKind::kSphere;
+    Vec3 local_offset{};
+    float radius = 0.2f;
+    float half_height = 0.0f;
+};
+
+struct BoundVolumeSet {
+    BoundVolume items[kMaxBoundVolumes]{};
+    std::uint32_t count = 0;
+};
+
+inline constexpr VolumeDef kDefaultHitboxes[] = {
+    {{"handslot.r", "hand_r", nullptr, nullptr},
+     VolumeKind::kCapsule,
+     {0.0f, 0.55f, 0.0f},
+     0.55f,
+     0.50f},
+};
+inline constexpr std::uint32_t kDefaultHitboxCount =
+    sizeof(kDefaultHitboxes) / sizeof(kDefaultHitboxes[0]);
+
+inline constexpr VolumeDef kDefaultHurtboxes[] = {
+    {{"head", nullptr, nullptr, nullptr},
+     VolumeKind::kSphere,
+     {0.0f, 0.15f, 0.08f},
+     0.35f,
+     0.0f},
+    {{"chest", "spine", nullptr, nullptr},
+     VolumeKind::kCapsule,
+     {0.0f, 0.04f, 0.0f},
+     0.40f,
+     0.24f},
+    {{"hips", nullptr, nullptr, nullptr},
+     VolumeKind::kSphere,
+     {0.0f, 0.02f, 0.0f},
+     0.35f,
+     0.0f},
+};
+inline constexpr std::uint32_t kDefaultHurtboxCount =
+    sizeof(kDefaultHurtboxes) / sizeof(kDefaultHurtboxes[0]);
+
+// Resolves the first matching alias per def. Unknown joints are skipped
+// so a partial skeleton still binds the volumes it has.
+std::uint32_t bind_volumes(const VolumeDef* defs, std::uint32_t def_count,
+                           const char* const* joint_names, std::uint32_t joint_count,
+                           BoundVolumeSet& out) noexcept;
 
 struct TickFlags {
     bool clip_finished = false; // the one-shot driving the current state ended

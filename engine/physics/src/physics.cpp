@@ -10,6 +10,7 @@
 #include "hue/core/memory.h"
 #include "hue/core/trace.h"
 
+#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <new>
@@ -41,10 +42,14 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/CollisionDispatch.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
@@ -185,6 +190,45 @@ void jolt_global_shutdown() noexcept {
 [[nodiscard]] JPH::Quat to_jolt(Quat q) noexcept { return {q.x, q.y, q.z, q.w}; }
 [[nodiscard]] Vec3 from_jolt(JPH::Vec3Arg v) noexcept {
     return {v.GetX(), v.GetY(), v.GetZ()};
+}
+
+[[nodiscard]] bool finite_mat4(const Mat4& m) noexcept {
+    for (float value : m.m) {
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool valid_combat_extents(float radius, float half_height) noexcept {
+    return std::isfinite(radius) && radius > 0.0f && radius <= kMaxCombatShapeExtent &&
+           std::isfinite(half_height) && half_height >= 0.0f &&
+           half_height <= kMaxCombatShapeExtent;
+}
+
+[[nodiscard]] JPH::Mat44 to_jolt_mat(const Mat4& m) noexcept {
+    return JPH::Mat44::sLoadFloat4x4Aligned(reinterpret_cast<const JPH::Float4*>(m.m));
+}
+
+[[nodiscard]] bool collide_shapes(const JPH::Shape* a, const JPH::Mat44& a_com,
+                                  const JPH::Shape* b, const JPH::Mat44& b_com) noexcept {
+    if (a == nullptr || b == nullptr) {
+        return false;
+    }
+    JPH::CollideShapeSettings settings;
+    JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> collector;
+    JPH::CollisionDispatch::sCollideShapeVsShape(
+        a, b, JPH::Vec3::sOne(), JPH::Vec3::sOne(), a_com, b_com, JPH::SubShapeIDCreator(),
+        JPH::SubShapeIDCreator(), settings, collector);
+    return collector.HadHit();
+}
+
+[[nodiscard]] JPH::Ref<JPH::Shape> make_combat_shape(float half_height, float radius) noexcept {
+    if (half_height <= 1.0e-4f) {
+        return new JPH::SphereShape(radius);
+    }
+    return new JPH::CapsuleShape(half_height, radius);
 }
 
 struct CharacterSlot {
@@ -437,6 +481,49 @@ RayHit PhysicsWorld::cast_ray(Vec3 origin, Vec3 direction, float max_distance) c
             hit.mSubShapeID2, ray.GetPointOnRay(hit.mFraction)));
     }
     return result;
+}
+
+bool PhysicsWorld::overlap_capsules(const Mat4& a_world, float a_half_height, float a_radius,
+                                    const Mat4& b_world, float b_half_height,
+                                    float b_radius) const noexcept {
+    if (m_state == nullptr || !finite_mat4(a_world) || !finite_mat4(b_world) ||
+        !valid_combat_extents(a_radius, a_half_height) ||
+        !valid_combat_extents(b_radius, b_half_height)) {
+        return false;
+    }
+    const JPH::Ref<JPH::Shape> a = make_combat_shape(a_half_height, a_radius);
+    const JPH::Ref<JPH::Shape> b = make_combat_shape(b_half_height, b_radius);
+    return collide_shapes(a.GetPtr(), to_jolt_mat(a_world), b.GetPtr(), to_jolt_mat(b_world));
+}
+
+bool PhysicsWorld::overlap_capsule_sphere(const Mat4& capsule_world, float half_height,
+                                          float capsule_radius, Vec3 sphere_center,
+                                          float sphere_radius) const noexcept {
+    if (m_state == nullptr || !finite_mat4(capsule_world) ||
+        !valid_combat_extents(capsule_radius, half_height) ||
+        !valid_combat_extents(sphere_radius, 0.0f) || !std::isfinite(sphere_center.x) ||
+        !std::isfinite(sphere_center.y) || !std::isfinite(sphere_center.z)) {
+        return false;
+    }
+    const JPH::Ref<JPH::Shape> capsule = make_combat_shape(half_height, capsule_radius);
+    const JPH::Ref<JPH::Shape> sphere = new JPH::SphereShape(sphere_radius);
+    return collide_shapes(capsule.GetPtr(), to_jolt_mat(capsule_world), sphere.GetPtr(),
+                          JPH::Mat44::sTranslation(to_jolt(sphere_center)));
+}
+
+bool PhysicsWorld::overlap_spheres(Vec3 a_center, float a_radius, Vec3 b_center,
+                                   float b_radius) const noexcept {
+    if (m_state == nullptr || !valid_combat_extents(a_radius, 0.0f) ||
+        !valid_combat_extents(b_radius, 0.0f) || !std::isfinite(a_center.x) ||
+        !std::isfinite(a_center.y) || !std::isfinite(a_center.z) ||
+        !std::isfinite(b_center.x) || !std::isfinite(b_center.y) ||
+        !std::isfinite(b_center.z)) {
+        return false;
+    }
+    const JPH::Ref<JPH::Shape> a = new JPH::SphereShape(a_radius);
+    const JPH::Ref<JPH::Shape> b = new JPH::SphereShape(b_radius);
+    return collide_shapes(a.GetPtr(), JPH::Mat44::sTranslation(to_jolt(a_center)), b.GetPtr(),
+                          JPH::Mat44::sTranslation(to_jolt(b_center)));
 }
 
 std::uint32_t PhysicsWorld::static_body_count() const noexcept {

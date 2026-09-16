@@ -13,6 +13,7 @@
 #include "hue/combat/combat.h"
 #include "hue/core/memory.h"
 #include "hue/core/result.h"
+#include "hue/physics/physics.h"
 #include "hue/render/renderer.h"
 
 #include <cstdint>
@@ -37,9 +38,11 @@ public:
     // Ground speed feeding the locomotion idle/walk/run blend.
     void set_locomotion_speed(float speed) noexcept { m_speed = speed; }
 
-    // Incoming damage, consumed on the next tick. Invulnerable frames
-    // (dodge i-frames) ignore the hit entirely.
+    // Incoming damage. Invulnerable frames (dodge i-frames) ignore the
+    // hit entirely. apply_damage always staggers; apply_strike uses poise
+    // so chip hits can land without a hit-react.
     void apply_damage(float amount) noexcept;
+    [[nodiscard]] hue::combat::StrikeContact apply_strike(const hue::combat::Strike& strike) noexcept;
     void notify_hit(bool fatal) noexcept {
         m_pending_hit = true;
         m_pending_fatal = m_pending_fatal || fatal;
@@ -47,6 +50,10 @@ public:
 
     [[nodiscard]] hue::Result<void> update(float delta_seconds, hue::LinearArena& arena,
                                            hue::MeshDraw* draws);
+
+    [[nodiscard]] bool hitbox_overlaps(const hue::Mat4& self_model, const CombatCharacter& other,
+                                       const hue::Mat4& other_model,
+                                       hue::physics::PhysicsWorld& physics) const noexcept;
 
     [[nodiscard]] hue::combat::State state() const noexcept { return m_machine.state(); }
     [[nodiscard]] float state_seconds() const noexcept { return m_machine.state_seconds(); }
@@ -58,6 +65,7 @@ public:
     [[nodiscard]] float health_ratio() const noexcept {
         return m_max_health > 0.0f ? m_health / m_max_health : 0.0f;
     }
+    [[nodiscard]] float poise() const noexcept { return m_poise; }
 
 private:
     [[nodiscard]] hue::Result<void> start_state_clip(hue::combat::State state);
@@ -81,6 +89,14 @@ private:
     float m_speed = 0.0f;
     float m_health = 100.0f;
     float m_max_health = 100.0f;
+    float m_poise = 40.0f;
+    float m_max_poise = 40.0f;
+    float m_poise_regen_delay = 0.0f;
     bool m_pending_hit = false;
     bool m_pending_fatal = false;
+
+    hue::combat::BoundVolumeSet m_hitboxes{};
+    hue::combat::BoundVolumeSet m_hurtboxes{};
+    const hue::Mat4* m_globals = nullptr;
+    std::uint32_t m_joint_count = 0;
 };

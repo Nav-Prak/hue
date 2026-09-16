@@ -19,6 +19,7 @@ inline constexpr std::uint32_t kMaxPhysicsCharacters = 8;
 inline constexpr std::uint32_t kMaxStaticBodies = 128;
 inline constexpr std::size_t kMaxCookedVertices = 1u << 20;
 inline constexpr std::size_t kMaxCookedIndices = 3u << 20;
+inline constexpr float kMaxCombatShapeExtent = 8.0f;
 
 struct RayHit {
     bool hit = false;
@@ -72,6 +73,19 @@ public:
     // Closest-hit raycast against the static arena (direction normalized).
     [[nodiscard]] RayHit cast_ray(Vec3 origin, Vec3 direction,
                                   float max_distance) const noexcept;
+
+    // Week 10 combat queries: Jolt narrow-phase overlap of capsules
+    // (Y-axis, COM at the transform) and spheres. Shapes are engine-built
+    // from bounded radii, not cooked from asset geometry. Non-finite or
+    // oversized arguments miss rather than asserting inside Jolt.
+    [[nodiscard]] bool overlap_capsules(const Mat4& a_world, float a_half_height, float a_radius,
+                                        const Mat4& b_world, float b_half_height,
+                                        float b_radius) const noexcept;
+    [[nodiscard]] bool overlap_capsule_sphere(const Mat4& capsule_world, float half_height,
+                                              float capsule_radius, Vec3 sphere_center,
+                                              float sphere_radius) const noexcept;
+    [[nodiscard]] bool overlap_spheres(Vec3 a_center, float a_radius, Vec3 b_center,
+                                       float b_radius) const noexcept;
 
     [[nodiscard]] std::uint32_t static_body_count() const noexcept;
     [[nodiscard]] std::uint32_t character_count() const noexcept;

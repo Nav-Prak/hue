@@ -4,6 +4,7 @@
 // untrusted input; every rejection case here is a trust-boundary check
 // the fuzz harness will then hammer with random inputs.
 
+#include "hue/anim/animation.h"
 #include "hue/asset/gltf_loader.h"
 #include "hue/core/array.h"
 #include "hue/core/memory.h"
@@ -433,6 +434,10 @@ TEST_CASE("gltf skinned: KayKit player has combat clips and multi-primitive skin
             }
         }
         CHECK(found);
+    }
+    const char* required_joints[] = {"head", "chest", "hips", "handslot.r"};
+    for (const char* name : required_joints) {
+        CHECK(hue::anim::find_joint(mesh.value(), name) >= 0);
     }
 }
 

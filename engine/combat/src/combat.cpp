@@ -143,4 +143,41 @@ State StateMachine::update(float dt, const TickFlags& flags) noexcept {
     return m_state;
 }
 
+std::uint32_t bind_volumes(const VolumeDef* defs, std::uint32_t def_count,
+                           const char* const* joint_names, std::uint32_t joint_count,
+                           BoundVolumeSet& out) noexcept {
+    out.count = 0;
+    if (defs == nullptr || joint_names == nullptr || def_count == 0) {
+        return 0;
+    }
+    for (std::uint32_t d = 0; d < def_count && out.count < kMaxBoundVolumes; ++d) {
+        std::int32_t joint = -1;
+        for (std::uint32_t alias = 0; alias < kMaxJointAliases; ++alias) {
+            const char* name = defs[d].joint_aliases[alias];
+            if (name == nullptr || name[0] == '\0') {
+                break;
+            }
+            for (std::uint32_t j = 0; j < joint_count; ++j) {
+                if (joint_names[j] != nullptr && std::strcmp(joint_names[j], name) == 0) {
+                    joint = static_cast<std::int32_t>(j);
+                    break;
+                }
+            }
+            if (joint >= 0) {
+                break;
+            }
+        }
+        if (joint < 0) {
+            continue;
+        }
+        BoundVolume& volume = out.items[out.count++];
+        volume.joint = joint;
+        volume.kind = defs[d].kind;
+        volume.local_offset = defs[d].local_offset;
+        volume.radius = defs[d].radius;
+        volume.half_height = defs[d].half_height;
+    }
+    return out.count;
+}
+
 } // namespace hue::combat
