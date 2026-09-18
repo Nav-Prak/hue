@@ -1,7 +1,10 @@
-# Combat state machine (Week 9): pure gameplay logic, no allocation.
+# Combat state machine (Week 9) + enemy brain (Week 11): pure gameplay
+# logic, no allocation, no physics.
 add_library(hue_combat STATIC
     include/hue/combat/combat.h
+    include/hue/combat/ai.h
     src/combat.cpp
+    src/ai.cpp
 )
 
 add_library(hue::combat ALIAS hue_combat)

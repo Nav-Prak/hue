@@ -27,6 +27,7 @@
 #include "hue/core/version.h"
 #include "hue/core/window.h"
 #include "hue/anim/animation.h"
+#include "hue/combat/ai.h"
 #include "hue/combat/combat.h"
 #include "hue/ecs/ecs.h"
 #include "hue/physics/physics.h"
@@ -267,6 +268,11 @@ constexpr float kDodgeDecaySeconds = 0.45f;
 constexpr float kLockAcquireRange = 15.0f;
 constexpr float kLockBreakRange = 20.0f;
 
+// Chest-to-chest LOS against the static arena. Character capsules are
+// CharacterVirtual and do not block the probe.
+constexpr float kLosChestHeight = 1.2f;
+constexpr float kLosClearFraction = 0.92f;
+
 // ------------------------------------------------------------- ECS pieces
 
 // Week 8 components: enough to route physics -> transforms -> draws through
@@ -321,6 +327,21 @@ cook_static_collision(const hue::asset::StaticMeshData& data, const hue::Mat4& w
     }
     return physics.add_static_mesh(positions.data(), positions.size(), indices.data(),
                                    indices.size());
+}
+
+[[nodiscard]] bool has_line_of_sight(const hue::physics::PhysicsWorld& physics,
+                                     hue::Vec3 from_feet, hue::Vec3 to_feet) noexcept {
+    const hue::Vec3 from{from_feet.x, from_feet.y + kLosChestHeight, from_feet.z};
+    const hue::Vec3 to{to_feet.x, to_feet.y + kLosChestHeight, to_feet.z};
+    const hue::Vec3 delta{to.x - from.x, to.y - from.y, to.z - from.z};
+    const float dist_sq = length_squared(delta);
+    if (dist_sq < 0.05f * 0.05f) {
+        return true;
+    }
+    const float dist = std::sqrt(dist_sq);
+    const hue::physics::RayHit hit =
+        physics.cast_ray(from, delta * (1.0f / dist), dist);
+    return !hit.hit || hit.fraction >= kLosClearFraction;
 }
 
 [[nodiscard]] float wrap_angle(float radians_in) noexcept {
@@ -589,8 +610,8 @@ int main(int argc, char** argv) {
         HUE_LOG_ERROR("player capsule controller creation failed");
         return 1;
     }
-    // The enemy stands on its own capsule (grounded by the same solver);
-    // it only starts steering itself when AI lands in Week 11.
+    // The enemy stands on its own capsule (grounded by the same solver).
+    // Week 11 AI writes its desired planar velocity here each tick.
     hue::physics::CharacterDesc enemy_capsule;
     enemy_capsule.position = {kEnemySpawn.x, 0.05f, kEnemySpawn.z};
     const auto enemy_body = physics.value().create_character(enemy_capsule);
@@ -713,9 +734,7 @@ int main(int argc, char** argv) {
     bool lock_on = false;
     hue::Vec3 player_dodge_direction{0.0f, 0.0f, -1.0f};
     hue::combat::State player_previous_state = hue::combat::State::kLocomotion;
-    // Scripted enemy pressure until Week 11 AI: alternate light/heavy swings.
-    float enemy_action_timer = 2.0f;
-    bool enemy_heavy_next = false;
+    hue::combat::Brain enemy_ai{{}, 2026u};
     bool strike_consumed[2] = {};
     float hitstop_remaining = 0.0f;
 
@@ -803,16 +822,31 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            // Scripted enemy pressure until Week 11 AI: a swing every 3s,
-            // alternating light and heavy so both cancel tables run live.
-            if (combat_characters[1] && combat_characters[1]->alive()) {
-                enemy_action_timer -= kTick;
-                if (enemy_action_timer <= 0.0f) {
-                    combat_characters[1]->buffer_action(
-                        enemy_heavy_next ? hue::combat::Action::kAttackHeavy
-                                         : hue::combat::Action::kAttackLight);
-                    enemy_heavy_next = !enemy_heavy_next;
-                    enemy_action_timer = 3.0f;
+            // Week 11: perception (distance + static-arena LOS) drives the
+            // enemy brain. Commands reuse the player's buffer + capsule.
+            hue::combat::AiCommand enemy_command{};
+            if (combat_characters[1]) {
+                const hue::Vec3 enemy_pos =
+                    physics.value().character_position(enemy_body.value());
+                const hue::Vec3 player_pos =
+                    physics.value().character_position(player_body.value());
+                const hue::Vec3 to_target{player_pos.x - enemy_pos.x, 0.0f,
+                                          player_pos.z - enemy_pos.z};
+                hue::combat::Perception sense;
+                sense.target_alive = combat_characters[0] && combat_characters[0]->alive();
+                sense.self_alive = combat_characters[1]->alive();
+                sense.line_of_sight =
+                    has_line_of_sight(physics.value(), enemy_pos, player_pos);
+                sense.distance = length(to_target);
+                sense.to_target = to_target;
+                sense.self_state = combat_characters[1]->state();
+                enemy_command = enemy_ai.update(kTick, sense);
+                if (enemy_ai.entered()) {
+                    HUE_LOG_INFO("enemy ai: %s",
+                                 hue::combat::ai_state_name(enemy_ai.state()));
+                }
+                if (enemy_command.action != hue::combat::Action::kNone) {
+                    combat_characters[1]->buffer_action(enemy_command.action);
                 }
             }
 
@@ -833,6 +867,8 @@ int main(int argc, char** argv) {
                 }
             }
             physics.value().set_character_velocity(player_body.value(), desired);
+            physics.value().set_character_velocity(enemy_body.value(),
+                                                   enemy_command.planar_velocity);
             const auto stepped = physics.value().update(kTick);
             if (!stepped) {
                 HUE_LOG_ERROR("physics update failed");
@@ -850,6 +886,9 @@ int main(int argc, char** argv) {
                         physics.value().character_position(body.character);
                     if (lock_on && entity == player_entity) {
                         return; // faced toward the lock target below
+                    }
+                    if (enemy_command.face_target && entity == enemy_entity) {
+                        return; // faced toward the player below
                     }
                     const hue::Vec3 velocity =
                         physics.value().character_velocity(body.character);
@@ -873,11 +912,30 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            if (enemy_command.face_target) {
+                if (TransformComponent* transform = transform_pool.value()->get(enemy_entity)) {
+                    const hue::Vec3 player_pos =
+                        physics.value().character_position(player_body.value());
+                    const hue::Vec3 to_player{player_pos.x - transform->position.x, 0.0f,
+                                              player_pos.z - transform->position.z};
+                    if (length_squared(to_player) > 0.01f) {
+                        const float target_yaw = std::atan2(-to_player.x, -to_player.z);
+                        const float delta = wrap_angle(target_yaw - transform->yaw);
+                        transform->yaw += hue::damp(0.0f, delta, 14.0f, kTick);
+                    }
+                }
+            }
 
             if (combat_characters[0]) {
                 const hue::Vec3 velocity =
                     physics.value().character_velocity(player_body.value());
                 combat_characters[0]->set_locomotion_speed(
+                    length(hue::Vec3{velocity.x, 0.0f, velocity.z}));
+            }
+            if (combat_characters[1]) {
+                const hue::Vec3 velocity =
+                    physics.value().character_velocity(enemy_body.value());
+                combat_characters[1]->set_locomotion_speed(
                     length(hue::Vec3{velocity.x, 0.0f, velocity.z}));
             }
             for (auto& character : combat_characters) {
