@@ -4,6 +4,15 @@
 
 #include "hue/core/time.h"
 
+TEST_CASE("fixed timestep: restart clears fractional debt but retains total steps") {
+    hue::FixedTimestep ts;
+    CHECK(ts.advance(1.5 * hue::FixedTimestep::kTickSeconds) == 1);
+    ts.reset_accumulator();
+    CHECK(ts.alpha() == 0.0);
+    CHECK(ts.total_steps() == 1);
+    CHECK(ts.advance(0.75 * hue::FixedTimestep::kTickSeconds) == 0);
+}
+
 TEST_CASE("fixed timestep: steady 60 fps yields one step per frame") {
     hue::FixedTimestep ts;
     int total = 0;

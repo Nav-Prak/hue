@@ -151,6 +151,11 @@ public:
     // Records a pressed action ("last press wins"). Expires if not consumed
     // within the buffer window.
     void buffer(Action action) noexcept;
+    void stop_actions() noexcept {
+        m_buffered = Action::kNone;
+        m_buffered_age = 0.0f;
+        m_hitbox_active = m_cancel_open = m_invulnerable = false;
+    }
 
     // Forwards one fired animation event by name. Unknown names are ignored
     // so gameplay events (foot_left, ...) can share the same track.

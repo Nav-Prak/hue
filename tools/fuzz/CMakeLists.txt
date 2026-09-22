@@ -13,3 +13,8 @@ add_executable(fuzz_gltf fuzz_gltf.cpp)
 target_link_libraries(fuzz_gltf PRIVATE hue::asset hue::options)
 target_compile_options(fuzz_gltf PRIVATE -fsanitize=fuzzer)
 target_link_options(fuzz_gltf PRIVATE -fsanitize=fuzzer)
+
+add_executable(fuzz_animation_events fuzz_animation_events.cpp)
+target_link_libraries(fuzz_animation_events PRIVATE hue::anim hue::options)
+target_compile_options(fuzz_animation_events PRIVATE -fsanitize=fuzzer)
+target_link_options(fuzz_animation_events PRIVATE -fsanitize=fuzzer)

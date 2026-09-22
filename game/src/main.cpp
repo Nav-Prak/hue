@@ -8,13 +8,21 @@
 // Week 5 uploads static meshes (procedural scene + a cube through the
 // validated glTF path) and flies a debug camera through them.
 // --frames N exits after N frames (CI smoke test).
+// Week 12 routes gameplay through Encounter; --encounter-smoke checks 20
+// reset/outcome cycles. Bitmap prompts and optional joint-volume diagnostics
+// use the existing HUD pass. Rendering does not advance gameplay state.
 
 #include "characters.h"
 #include "combat_character.h"
+#include "combat_hud.h"
+#include "encounter.h"
 #include "fly_camera.h"
 #include "follow_camera.h"
 #include "test_meshes.h"
 
+#include "hue/anim/animation.h"
+#include "hue/combat/ai.h"
+#include "hue/combat/combat.h"
 #include "hue/core/debug_channel.h"
 #include "hue/core/input.h"
 #include "hue/core/jobs.h"
@@ -26,18 +34,17 @@
 #include "hue/core/trace.h"
 #include "hue/core/version.h"
 #include "hue/core/window.h"
-#include "hue/anim/animation.h"
-#include "hue/combat/ai.h"
-#include "hue/combat/combat.h"
 #include "hue/ecs/ecs.h"
 #include "hue/physics/physics.h"
 #include "hue/render/camera.h"
 #include "hue/render/renderer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -243,9 +250,8 @@ void run_job_benchmark(hue::JobSystem& jobs) {
 
 // Movement tuning shared by the controller and the animation blend, so the
 // blend parameter is literally the character's ground speed.
-constexpr float kWalkSpeed = 1.6f;  // m/s, matches the walk gait
-constexpr float kRunSpeed = 4.0f;   // m/s, matches the locomotion (run) gait
-constexpr float kIdleThreshold = 0.2f;
+constexpr float kWalkSpeed = 1.6f; // m/s, matches the walk gait
+constexpr float kRunSpeed = 4.0f;  // m/s, matches the locomotion (run) gait
 
 // KayKit bind pose faces +Z (Unity). Hue locomotion treats yaw 0 as -Z,
 // matching the generated fixtures and the camera-relative WASD basis.
@@ -258,20 +264,6 @@ constexpr hue::Vec3 kPlayerSpawn{-0.8f, 0.0f, 3.0f};
 constexpr hue::Vec3 kEnemySpawn{0.8f, 0.0f, 3.0f};
 constexpr float kPlayerFacingDegrees = -90.0f; // +X
 constexpr float kEnemyFacingDegrees = 90.0f;   // -X
-
-// Week 9 dodge: a short burst that decays to zero over the roll. The clip
-// lasts 0.4s; the burst covers ~1.8m.
-constexpr float kDodgeSpeed = 6.0f;      // m/s at the start of the roll
-constexpr float kDodgeDecaySeconds = 0.45f;
-
-// Week 9 lock-on ranges (crude nearest-enemy acquire).
-constexpr float kLockAcquireRange = 15.0f;
-constexpr float kLockBreakRange = 20.0f;
-
-// Chest-to-chest LOS against the static arena. Character capsules are
-// CharacterVirtual and do not block the probe.
-constexpr float kLosChestHeight = 1.2f;
-constexpr float kLosClearFraction = 0.92f;
 
 // ------------------------------------------------------------- ECS pieces
 
@@ -294,9 +286,9 @@ struct BodyComponent {
 // into one world-space triangle soup and cooks it into a Jolt mesh body.
 // Collision therefore comes from the same data the renderer draws - no
 // hand-maintained box duplicates.
-[[nodiscard]] hue::Result<void>
-cook_static_collision(const hue::asset::StaticMeshData& data, const hue::Mat4& world_transform,
-                      hue::physics::PhysicsWorld& physics) {
+[[nodiscard]] hue::Result<void> cook_static_collision(const hue::asset::StaticMeshData& data,
+                                                      const hue::Mat4& world_transform,
+                                                      hue::physics::PhysicsWorld& physics) {
     hue::Array<hue::Vec3> positions{hue::MemoryTag::kPhysics};
     hue::Array<std::uint32_t> indices{hue::MemoryTag::kPhysics};
 
@@ -309,13 +301,12 @@ cook_static_collision(const hue::asset::StaticMeshData& data, const hue::Mat4& w
         const hue::Mat4 world = world_transform * instance.transform;
         for (std::uint32_t index = 0; index < primitive.index_count; ++index) {
             const std::uint32_t raw = data.indices[primitive.first_index + index];
-            const std::int64_t vertex =
-                static_cast<std::int64_t>(raw) + primitive.vertex_offset;
+            const std::int64_t vertex = static_cast<std::int64_t>(raw) + primitive.vertex_offset;
             if (vertex < 0 || vertex >= static_cast<std::int64_t>(data.vertices.size())) {
                 return hue::ErrorCode::kCorruptData;
             }
-            const hue::Vec3 position = world.transform_point(
-                data.vertices[static_cast<std::size_t>(vertex)].position);
+            const hue::Vec3 position =
+                world.transform_point(data.vertices[static_cast<std::size_t>(vertex)].position);
             if (!indices.push_back(static_cast<std::uint32_t>(positions.size())) ||
                 !positions.push_back(position)) {
                 return hue::ErrorCode::kOutOfMemory;
@@ -329,27 +320,6 @@ cook_static_collision(const hue::asset::StaticMeshData& data, const hue::Mat4& w
                                    indices.size());
 }
 
-[[nodiscard]] bool has_line_of_sight(const hue::physics::PhysicsWorld& physics,
-                                     hue::Vec3 from_feet, hue::Vec3 to_feet) noexcept {
-    const hue::Vec3 from{from_feet.x, from_feet.y + kLosChestHeight, from_feet.z};
-    const hue::Vec3 to{to_feet.x, to_feet.y + kLosChestHeight, to_feet.z};
-    const hue::Vec3 delta{to.x - from.x, to.y - from.y, to.z - from.z};
-    const float dist_sq = length_squared(delta);
-    if (dist_sq < 0.05f * 0.05f) {
-        return true;
-    }
-    const float dist = std::sqrt(dist_sq);
-    const hue::physics::RayHit hit =
-        physics.cast_ray(from, delta * (1.0f / dist), dist);
-    return !hit.hit || hit.fraction >= kLosClearFraction;
-}
-
-[[nodiscard]] float wrap_angle(float radians_in) noexcept {
-    while (radians_in > hue::kPi) radians_in -= hue::kTwoPi;
-    while (radians_in < -hue::kPi) radians_in += hue::kTwoPi;
-    return radians_in;
-}
-
 // WASD (or left stick) relative to the camera yaw. Keyboard: shift runs.
 // Gamepad: stick deflection is analog - direction from the angle, walk-to-
 // run speed from the magnitude.
@@ -359,10 +329,14 @@ cook_static_collision(const hue::asset::StaticMeshData& data, const hue::Mat4& w
 
     float forward_axis = 0.0f;
     float right_axis = 0.0f;
-    if (input.key_down(key::kW)) forward_axis += 1.0f;
-    if (input.key_down(key::kS)) forward_axis -= 1.0f;
-    if (input.key_down(key::kD)) right_axis += 1.0f;
-    if (input.key_down(key::kA)) right_axis -= 1.0f;
+    if (input.key_down(key::kW))
+        forward_axis += 1.0f;
+    if (input.key_down(key::kS))
+        forward_axis -= 1.0f;
+    if (input.key_down(key::kD))
+        right_axis += 1.0f;
+    if (input.key_down(key::kA))
+        right_axis -= 1.0f;
     float speed = input.key_down(key::kLeftShift) ? kRunSpeed : kWalkSpeed;
 
     const GamepadState& pad = input.gamepad();
@@ -380,7 +354,8 @@ cook_static_collision(const hue::asset::StaticMeshData& data, const hue::Mat4& w
             speed = lerp(kWalkSpeed, kRunSpeed, deflection);
         }
     }
-    if (forward_axis == 0.0f && right_axis == 0.0f) return {};
+    if (forward_axis == 0.0f && right_axis == 0.0f)
+        return {};
 
     const Vec3 forward{-std::sin(camera_yaw), 0.0f, -std::cos(camera_yaw)};
     const Vec3 right{std::cos(camera_yaw), 0.0f, -std::sin(camera_yaw)};
@@ -412,8 +387,7 @@ void append_health_bar(hue::HudQuad* quads, std::uint32_t& count, float x0, floa
 }
 
 [[nodiscard]] bool world_to_ndc(const hue::Camera& camera, hue::Vec3 world, hue::Vec2& ndc) {
-    const hue::Vec4 clip =
-        camera.view_projection() * hue::Vec4{world.x, world.y, world.z, 1.0f};
+    const hue::Vec4 clip = camera.view_projection() * hue::Vec4{world.x, world.y, world.z, 1.0f};
     if (!(clip.w > 0.05f) || !std::isfinite(clip.w)) {
         return false;
     }
@@ -431,11 +405,15 @@ int main(int argc, char** argv) {
 
     long long max_frames = -1; // run until closed
     bool require_renderer = false;
+    bool encounter_smoke = false;
     bool debug_channel_requested = false;
-    std::uint32_t debug_channel_port = hue::kDebugChannelDefaultPort;
+    [[maybe_unused]] std::uint32_t debug_channel_port = hue::kDebugChannelDefaultPort;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             max_frames = std::atoll(argv[i + 1]);
+        } else if (std::strcmp(argv[i], "--encounter-smoke") == 0) {
+            encounter_smoke = true;
+            max_frames = 2400;
         } else if (std::strcmp(argv[i], "--require-renderer") == 0) {
             require_renderer = true;
         } else if (std::strcmp(argv[i], "--debug-channel") == 0) {
@@ -486,8 +464,7 @@ int main(int argc, char** argv) {
     // Scene mesh data builds regardless of the renderer so headless runs
     // still get a physics arena; GPU uploads stay renderer-gated below.
     const hue::Mat4 cube_world = hue::Mat4::trs(
-        {0.0f, 3.75f, 0.0f},
-        hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f}, hue::radians(30.0f)),
+        {0.0f, 3.75f, 0.0f}, hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f}, hue::radians(30.0f)),
         {1.5f, 1.5f, 1.5f});
     auto ground = build_ground_scene();
     auto gltf_cube = build_gltf_cube();
@@ -503,99 +480,62 @@ int main(int argc, char** argv) {
         }
     }
     if (gltf_cube) {
-        const auto cooked =
-            cook_static_collision(gltf_cube.value(), cube_world, physics.value());
+        const auto cooked = cook_static_collision(gltf_cube.value(), cube_world, physics.value());
         if (!cooked) {
             HUE_LOG_ERROR("glTF cube collision cook failed");
             return 1;
         }
     }
 
-    // Renderer/assets scene plus two live GPU-skinned combat characters.
+    // Load gameplay assets even without Vulkan: headless sessions exercise the
+    // same combat/animation path. Missing characters are fatal, never an empty arena.
     hue::MeshDraw draws[4];
     std::optional<CombatCharacter> combat_characters[2];
-    std::uint32_t character_draw_indices[2] = {UINT32_MAX, UINT32_MAX};
+    std::uint32_t character_draw_indices[2]{};
     std::uint32_t draw_count = 0;
     if (renderer_active) {
         if (ground) {
-            const auto uploaded = renderer.value().upload_static_mesh(ground.value());
-            if (uploaded) {
-                draws[draw_count].mesh = uploaded.value();
-                draws[draw_count].transform = hue::Mat4::identity();
-                ++draw_count;
-            }
+            auto uploaded = renderer.value().upload_static_mesh(ground.value());
+            if (!uploaded)
+                return 1;
+            draws[draw_count++].mesh = uploaded.value();
         }
         if (gltf_cube) {
-            const auto uploaded = renderer.value().upload_static_mesh(gltf_cube.value());
-            if (uploaded) {
-                draws[draw_count].mesh = uploaded.value();
-                draws[draw_count].transform = cube_world;
-                ++draw_count;
-            }
+            auto uploaded = renderer.value().upload_static_mesh(gltf_cube.value());
+            if (!uploaded)
+                return 1;
+            draws[draw_count].mesh = uploaded.value();
+            draws[draw_count++].transform = cube_world;
         }
-
-        const struct {
-            const char* file;
-            const char* events;
-            hue::Vec3 position;
-            float facing_degrees;
-        } characters[2] = {
-            {"player.glb", "player.events.json", kPlayerSpawn, kPlayerFacingDegrees},
-            {"enemy.glb", "enemy.events.json", kEnemySpawn, kEnemyFacingDegrees},
-        };
-        for (std::uint32_t character_index = 0; character_index < 2; ++character_index) {
-            const auto& character = characters[character_index];
-            auto skinned = load_character(character.file);
-            if (!skinned) {
-                continue; // already logged; scene continues without them
-            }
-            auto events = load_character_events(character.events);
-            if (!events) {
-                continue;
-            }
-            const auto valid_events =
-                hue::anim::validate_animation_events(skinned.value(), events.value());
-            if (!valid_events) {
-                HUE_LOG_WARN("animation events do not match %s", character.file);
-                continue;
-            }
-            const auto uploaded = renderer.value().upload_skinned_mesh(skinned.value());
-            if (uploaded) {
-                const std::uint32_t character_draw = draw_count;
-                draws[character_draw].mesh = uploaded.value();
-                draws[draw_count].transform = hue::Mat4::trs(
-                    character.position,
-                    hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
-                                               hue::radians(character.facing_degrees) +
-                                                   kModelYawOffset),
-                    {1.0f, 1.0f, 1.0f});
-                ++draw_count;
-                character_draw_indices[character_index] = character_draw;
-                combat_characters[character_index].emplace(
-                    std::move(skinned.value()), std::move(events.value()), uploaded.value(),
-                    character_draw);
-                const auto initialized = combat_characters[character_index]->initialize();
-                if (!initialized) {
-                    HUE_LOG_ERROR("combat character init failed for %s", character.file);
-                    return 1;
-                }
-            }
+    }
+    const char* model_files[2] = {"player.glb", "enemy.glb"};
+    const char* event_files[2] = {"player.events.json", "enemy.events.json"};
+    for (std::uint32_t i = 0; i < 2; ++i) {
+        auto skinned = load_character(model_files[i]);
+        auto events = load_character_events(event_files[i]);
+        if (!skinned || !events) {
+            HUE_LOG_ERROR("required encounter assets are missing or invalid");
+            return 1;
         }
-
-        // Point lights (Week 6 spec: one directional + point lights): a
-        // warm torch over the pillar and a cool fill between the fighters.
-        const hue::PointLight point_lights[2] = {
+        hue::MeshHandle mesh{};
+        if (renderer_active) {
+            auto uploaded = renderer.value().upload_skinned_mesh(skinned.value());
+            if (!uploaded)
+                return 1;
+            mesh = uploaded.value();
+        }
+        character_draw_indices[i] = draw_count;
+        combat_characters[i].emplace(std::move(skinned.value()), std::move(events.value()), mesh,
+                                     draw_count++);
+        if (!combat_characters[i]->initialize())
+            return 1;
+    }
+    if (renderer_active) {
+        const hue::PointLight lights[2] = {
             {{0.0f, 4.2f, 0.0f}, 10.0f, {1.0f, 0.55f, 0.25f}, 14.0f},
             {{0.0f, 1.8f, 4.5f}, 8.0f, {0.35f, 0.5f, 1.0f}, 8.0f},
         };
-        renderer.value().set_point_lights(point_lights, 2);
-
-        if (draw_count > 0) {
-            HUE_LOG_INFO("scene ready: %u meshes, 2 point lights (RMB orbit, WASD move, "
-                         "shift run, LMB/pad-X light, E/pad-Y heavy, Space/pad-B dodge, "
-                         "Tab/pad-R3 lock-on, F1 debug fly cam)",
-                         draw_count);
-        }
+        renderer.value().set_point_lights(lights, 2);
     }
     FlyCamera fly_camera;
     FollowCamera follow_camera;
@@ -642,24 +582,21 @@ int main(int argc, char** argv) {
         }
         player_entity = created_player.value();
         enemy_entity = created_enemy.value();
-        bool ok =
-            world.add(player_entity,
-                      TransformComponent{kPlayerSpawn, hue::radians(kPlayerFacingDegrees)})
-                .has_value();
-        ok = ok && world.add(player_entity, BodyComponent{player_body.value()})
+        bool ok = world
+                      .add(player_entity,
+                           TransformComponent{kPlayerSpawn, hue::radians(kPlayerFacingDegrees)})
+                      .has_value();
+        ok = ok && world.add(player_entity, BodyComponent{player_body.value()}).has_value();
+        ok = ok && world
+                       .add(enemy_entity,
+                            TransformComponent{kEnemySpawn, hue::radians(kEnemyFacingDegrees)})
                        .has_value();
-        ok = ok && world.add(enemy_entity,
-                             TransformComponent{kEnemySpawn, hue::radians(kEnemyFacingDegrees)})
-                       .has_value();
-        ok = ok && world.add(enemy_entity, BodyComponent{enemy_body.value()})
-                       .has_value();
+        ok = ok && world.add(enemy_entity, BodyComponent{enemy_body.value()}).has_value();
         if (ok && character_draw_indices[0] != UINT32_MAX) {
-            ok = world.add(player_entity, DrawComponent{character_draw_indices[0]})
-                     .has_value();
+            ok = world.add(player_entity, DrawComponent{character_draw_indices[0]}).has_value();
         }
         if (ok && character_draw_indices[1] != UINT32_MAX) {
-            ok = world.add(enemy_entity, DrawComponent{character_draw_indices[1]})
-                     .has_value();
+            ok = world.add(enemy_entity, DrawComponent{character_draw_indices[1]}).has_value();
         }
         if (!ok) {
             HUE_LOG_ERROR("ecs component setup failed");
@@ -676,8 +613,7 @@ int main(int argc, char** argv) {
     HUE_LOG_INFO("job system: %u workers", jobs.value().worker_count());
     run_job_benchmark(jobs.value());
 
-    auto animation_arena =
-        hue::LinearArena::create(256 * 1024, hue::MemoryTag::kAnimation);
+    auto animation_arena = hue::LinearArena::create(256 * 1024, hue::MemoryTag::kAnimation);
     if (!animation_arena) {
         HUE_LOG_ERROR("animation frame arena init failed");
         return 1;
@@ -686,10 +622,10 @@ int main(int argc, char** argv) {
 #if defined(HUE_DEBUG_CHANNEL)
     GameDebugContext debug_context;
     debug_context.renderer = renderer_active ? &renderer.value() : nullptr;
-    auto debug_channel = debug_channel_requested
-                             ? hue::DebugChannel::create(
-                                   static_cast<std::uint16_t>(debug_channel_port))
-                             : hue::Result<hue::DebugChannel>(hue::ErrorCode::kUnsupported);
+    auto debug_channel =
+        debug_channel_requested
+            ? hue::DebugChannel::create(static_cast<std::uint16_t>(debug_channel_port))
+            : hue::Result<hue::DebugChannel>(hue::ErrorCode::kUnsupported);
     if (debug_channel_requested) {
         if (!debug_channel) {
             HUE_LOG_ERROR("debug channel init failed");
@@ -699,13 +635,13 @@ int main(int argc, char** argv) {
             "status", "frames, sim steps, and uptime of the running game", &status_command,
             &debug_context);
         if (registered) {
-            registered = debug_channel.value().register_command(
-                "quit", "request a clean shutdown", &quit_command, &debug_context);
+            registered = debug_channel.value().register_command("quit", "request a clean shutdown",
+                                                                &quit_command, &debug_context);
         }
         if (registered) {
             registered = debug_channel.value().register_command(
-                "render.status", "adapter, swapchain size, frames rendered",
-                &render_status_command, &debug_context);
+                "render.status", "adapter, swapchain size, frames rendered", &render_status_command,
+                &debug_context);
         }
         if (registered) {
             registered = debug_channel.value().register_command(
@@ -730,14 +666,15 @@ int main(int argc, char** argv) {
     bool gamepad_was_connected = false;
     long long frames = 0;
 
-    // --- Week 9 combat/session state ---------------------------------------
-    bool lock_on = false;
-    hue::Vec3 player_dodge_direction{0.0f, 0.0f, -1.0f};
-    hue::combat::State player_previous_state = hue::combat::State::kLocomotion;
-    hue::combat::Brain enemy_ai{{}, 2026u};
-    bool strike_consumed[2] = {};
-    float hitstop_remaining = 0.0f;
-
+    Encounter encounter(physics.value(), *combat_characters[0], *combat_characters[1],
+                        player_body.value(), enemy_body.value(), follow_camera);
+    if (!encounter.reset(animation_arena.value(), draws))
+        return 1;
+    bool diagnostics = false;
+    double frame_samples[4096]{};
+    std::size_t frame_sample_count = 0;
+    std::size_t frame_sample_cursor = 0;
+    HUE_LOG_INFO("Enter/pad-Start begin; R restart; F2/pad-Back diagnostics");
     while (!window.value().should_close()) {
         HUE_PROFILE_ZONE("game::frame");
         hue::memory_begin_frame();
@@ -761,7 +698,39 @@ int main(int argc, char** argv) {
         }
 
         const double frame_seconds = clock.tick();
-        const int steps = timestep.advance(frame_seconds);
+        const int steps =
+            timestep.advance(encounter_smoke ? hue::FixedTimestep::kTickSeconds : frame_seconds);
+        frame_samples[frame_sample_cursor++ % 4096] = frame_seconds * 1000.0;
+        if (frame_sample_count < 4096)
+            ++frame_sample_count;
+        if (input.key_pressed(hue::key::kF2) || input.pad_pressed(hue::pad::kBack))
+            diagnostics = !diagnostics;
+
+        const bool begin =
+            input.key_pressed(hue::key::kEnter) || input.pad_pressed(hue::pad::kStart);
+        bool resetting = input.key_pressed(hue::key::kR) ||
+                         (begin && encounter.state() != EncounterState::kReady &&
+                          encounter.state() != EncounterState::kFighting);
+        if (encounter_smoke)
+            resetting = frames % 120 == 0;
+        if (resetting) {
+            if (!world.flush() || !encounter.reset(animation_arena.value(), draws))
+                return 1;
+            timestep.reset_accumulator();
+        } else if (begin) {
+            encounter.start();
+        }
+        if (encounter_smoke) {
+            if (frames % 120 == 1) {
+                encounter.start();
+                encounter.toggle_lock();
+            }
+            if (frames % 120 == 5)
+                encounter.buffer(hue::combat::Action::kAttackHeavy);
+            if (frames % 120 == 60)
+                combat_characters[(frames / 120) % 2 == 0 ? 1 : 0]->apply_damage(1000.0f);
+            diagnostics = (frames / 120) % 2 != 0;
+        }
 
         // Combat input: presses buffer into the state machine, which
         // consumes them at the next legal moment (cancel window/state end).
@@ -777,263 +746,39 @@ int main(int argc, char** argv) {
             if (input.key_pressed(hue::key::kSpace) || input.pad_pressed(hue::pad::kB)) {
                 pressed = Action::kDodge;
             }
-            if (pressed != Action::kNone && combat_characters[0]) {
-                combat_characters[0]->buffer_action(pressed);
-            }
+            if (!resetting)
+                encounter.buffer(pressed);
         }
 
-        // Lock-on: toggle acquires the nearest living enemy in range;
-        // distance or death breaks it.
-        if (input.key_pressed(hue::key::kTab) || input.pad_pressed(hue::pad::kRightThumb)) {
-            if (lock_on) {
-                lock_on = false;
-                HUE_LOG_INFO("lock-on released");
-            } else if (combat_characters[1] && combat_characters[1]->alive()) {
-                const hue::Vec3 player_pos =
-                    physics.value().character_position(player_body.value());
-                const hue::Vec3 enemy_pos =
-                    physics.value().character_position(enemy_body.value());
-                const hue::Vec3 to_enemy{enemy_pos.x - player_pos.x, 0.0f,
-                                         enemy_pos.z - player_pos.z};
-                if (length_squared(to_enemy) <= kLockAcquireRange * kLockAcquireRange) {
-                    lock_on = true;
-                    HUE_LOG_INFO("lock-on acquired");
-                }
-            }
-        }
-        if (lock_on) {
-            const hue::Vec3 player_pos = physics.value().character_position(player_body.value());
-            const hue::Vec3 enemy_pos = physics.value().character_position(enemy_body.value());
-            const hue::Vec3 to_enemy{enemy_pos.x - player_pos.x, 0.0f,
-                                     enemy_pos.z - player_pos.z};
-            const bool enemy_alive = combat_characters[1] && combat_characters[1]->alive();
-            if (!enemy_alive ||
-                length_squared(to_enemy) > kLockBreakRange * kLockBreakRange) {
-                lock_on = false;
-                HUE_LOG_INFO("lock-on broken");
-            }
-        }
-        for (int s = 0; s < steps; ++s) {
-            constexpr float kTick = static_cast<float>(hue::FixedTimestep::kTickSeconds);
-            log_input_edges(input); // input edges logged per sim tick
-
-            if (hitstop_remaining > 0.0f) {
-                hitstop_remaining -= kTick;
-                continue;
-            }
-
-            // Week 11: perception (distance + static-arena LOS) drives the
-            // enemy brain. Commands reuse the player's buffer + capsule.
-            hue::combat::AiCommand enemy_command{};
-            if (combat_characters[1]) {
-                const hue::Vec3 enemy_pos =
-                    physics.value().character_position(enemy_body.value());
-                const hue::Vec3 player_pos =
-                    physics.value().character_position(player_body.value());
-                const hue::Vec3 to_target{player_pos.x - enemy_pos.x, 0.0f,
-                                          player_pos.z - enemy_pos.z};
-                hue::combat::Perception sense;
-                sense.target_alive = combat_characters[0] && combat_characters[0]->alive();
-                sense.self_alive = combat_characters[1]->alive();
-                sense.line_of_sight =
-                    has_line_of_sight(physics.value(), enemy_pos, player_pos);
-                sense.distance = length(to_target);
-                sense.to_target = to_target;
-                sense.self_state = combat_characters[1]->state();
-                enemy_command = enemy_ai.update(kTick, sense);
-                if (enemy_ai.entered()) {
-                    HUE_LOG_INFO("enemy ai: %s",
-                                 hue::combat::ai_state_name(enemy_ai.state()));
-                }
-                if (enemy_command.action != hue::combat::Action::kNone) {
-                    combat_characters[1]->buffer_action(enemy_command.action);
-                }
-            }
-
-            // Player movement: camera-relative WASD/stick through the
-            // capsule controller; the solver output drives the anim blend.
-            // Combat states override it: dodge bursts along its captured
-            // direction, everything else roots the character.
-            hue::Vec3 desired = movement_input(input, follow_camera.yaw());
-            if (combat_characters[0]) {
-                const hue::combat::State state = combat_characters[0]->state();
-                if (state == hue::combat::State::kDodge) {
-                    const float t = combat_characters[0]->state_seconds();
-                    const float scale =
-                        t < kDodgeDecaySeconds ? 1.0f - t / kDodgeDecaySeconds : 0.0f;
-                    desired = player_dodge_direction * (kDodgeSpeed * scale);
-                } else if (state != hue::combat::State::kLocomotion) {
-                    desired = {};
-                }
-            }
-            physics.value().set_character_velocity(player_body.value(), desired);
-            physics.value().set_character_velocity(enemy_body.value(),
-                                                   enemy_command.planar_velocity);
-            const auto stepped = physics.value().update(kTick);
-            if (!stepped) {
-                HUE_LOG_ERROR("physics update failed");
+        if (!resetting &&
+            (input.key_pressed(hue::key::kTab) || input.pad_pressed(hue::pad::kRightThumb)))
+            encounter.toggle_lock();
+        for (int step = 0; step < steps; ++step) {
+            if (step == 0)
+                log_input_edges(input);
+            auto advanced = encounter.tick(movement_input(input, follow_camera.yaw()),
+                                           animation_arena.value(), draws);
+            if (!advanced) {
+                HUE_LOG_ERROR("encounter tick failed");
                 return 1;
             }
-
-            // Physics -> ECS transforms (position + smoothed facing). The
-            // locked-on player strafe-faces the target instead of the
-            // velocity direction.
-            hue::ecs::for_each(
-                *body_pool.value(), *transform_pool.value(),
-                [&](hue::ecs::Entity entity, BodyComponent& body,
-                    TransformComponent& transform) {
-                    transform.position =
-                        physics.value().character_position(body.character);
-                    if (lock_on && entity == player_entity) {
-                        return; // faced toward the lock target below
-                    }
-                    if (enemy_command.face_target && entity == enemy_entity) {
-                        return; // faced toward the player below
-                    }
-                    const hue::Vec3 velocity =
-                        physics.value().character_velocity(body.character);
-                    const hue::Vec3 planar{velocity.x, 0.0f, velocity.z};
-                    if (length_squared(planar) > kIdleThreshold * kIdleThreshold) {
-                        const float target_yaw = std::atan2(-planar.x, -planar.z);
-                        const float delta = wrap_angle(target_yaw - transform.yaw);
-                        transform.yaw += hue::damp(0.0f, delta, 14.0f, kTick);
-                    }
-                });
-            if (lock_on) {
-                if (TransformComponent* transform = transform_pool.value()->get(player_entity)) {
-                    const hue::Vec3 enemy_pos =
-                        physics.value().character_position(enemy_body.value());
-                    const hue::Vec3 to_enemy{enemy_pos.x - transform->position.x, 0.0f,
-                                             enemy_pos.z - transform->position.z};
-                    if (length_squared(to_enemy) > 0.01f) {
-                        const float target_yaw = std::atan2(-to_enemy.x, -to_enemy.z);
-                        const float delta = wrap_angle(target_yaw - transform->yaw);
-                        transform->yaw += hue::damp(0.0f, delta, 14.0f, kTick);
-                    }
-                }
-            }
-            if (enemy_command.face_target) {
-                if (TransformComponent* transform = transform_pool.value()->get(enemy_entity)) {
-                    const hue::Vec3 player_pos =
-                        physics.value().character_position(player_body.value());
-                    const hue::Vec3 to_player{player_pos.x - transform->position.x, 0.0f,
-                                              player_pos.z - transform->position.z};
-                    if (length_squared(to_player) > 0.01f) {
-                        const float target_yaw = std::atan2(-to_player.x, -to_player.z);
-                        const float delta = wrap_angle(target_yaw - transform->yaw);
-                        transform->yaw += hue::damp(0.0f, delta, 14.0f, kTick);
-                    }
-                }
-            }
-
-            if (combat_characters[0]) {
-                const hue::Vec3 velocity =
-                    physics.value().character_velocity(player_body.value());
-                combat_characters[0]->set_locomotion_speed(
-                    length(hue::Vec3{velocity.x, 0.0f, velocity.z}));
-            }
-            if (combat_characters[1]) {
-                const hue::Vec3 velocity =
-                    physics.value().character_velocity(enemy_body.value());
-                combat_characters[1]->set_locomotion_speed(
-                    length(hue::Vec3{velocity.x, 0.0f, velocity.z}));
-            }
-            for (auto& character : combat_characters) {
-                if (!character) continue;
-                const auto animated =
-                    character->update(kTick, animation_arena.value(), draws);
-                if (!animated) {
-                    HUE_LOG_ERROR("combat character update failed");
-                    return 1;
-                }
-            }
-
-            // Capture the dodge direction the moment the roll starts:
-            // along current movement input, else backward out of the
-            // character's facing.
-            if (combat_characters[0]) {
-                const hue::combat::State state = combat_characters[0]->state();
-                if (state == hue::combat::State::kDodge &&
-                    player_previous_state != hue::combat::State::kDodge) {
-                    const hue::Vec3 move = movement_input(input, follow_camera.yaw());
-                    const hue::Vec3 planar{move.x, 0.0f, move.z};
-                    if (length_squared(planar) > 0.01f) {
-                        player_dodge_direction = normalize(planar);
-                    } else if (const TransformComponent* transform =
-                                   transform_pool.value()->get(player_entity)) {
-                        player_dodge_direction = {std::sin(transform->yaw), 0.0f,
-                                                  std::cos(transform->yaw)};
-                    }
-                }
-                player_previous_state = state;
-            }
-
-            // Week 10 melee: joint-attached hitbox vs hurtbox overlap
-            // through Jolt, one successful hit per hitbox activation.
-            const auto model_of = [&](hue::ecs::Entity entity) -> hue::Mat4 {
-                const TransformComponent* transform = transform_pool.value()->get(entity);
-                if (transform == nullptr) {
-                    return hue::Mat4::identity();
-                }
-                return hue::Mat4::trs(
-                    transform->position,
-                    hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
-                                               transform->yaw + kModelYawOffset),
-                    {1.0f, 1.0f, 1.0f});
-            };
-            const auto try_strike = [&](int attacker, int defender, hue::ecs::Entity attacker_entity,
-                                        hue::ecs::Entity defender_entity) {
-                if (!combat_characters[attacker] || !combat_characters[defender]) {
-                    return;
-                }
-                if (!combat_characters[attacker]->hitbox_active()) {
-                    strike_consumed[attacker] = false;
-                    return;
-                }
-                if (strike_consumed[attacker] || !combat_characters[defender]->alive() ||
-                    combat_characters[defender]->invulnerable()) {
-                    return;
-                }
-                if (!combat_characters[attacker]->hitbox_overlaps(
-                        model_of(attacker_entity), *combat_characters[defender],
-                        model_of(defender_entity), physics.value())) {
-                    return;
-                }
-                const hue::combat::Strike strike =
-                    combat_characters[attacker]->state() == hue::combat::State::kAttackHeavy
-                        ? hue::combat::kStrikeHeavy
-                        : hue::combat::kStrikeLight;
-                const hue::combat::StrikeContact contact =
-                    combat_characters[defender]->apply_strike(strike);
-                if (!contact.landed) {
-                    return;
-                }
-                strike_consumed[attacker] = true;
-                HUE_LOG_INFO("hit landed: %s -> %s (hp %.0f, stagger %d, fatal %d)",
-                             attacker == 0 ? "player" : "enemy",
-                             defender == 0 ? "player" : "enemy",
-                             static_cast<double>(combat_characters[defender]->health()),
-                             contact.staggered ? 1 : 0, contact.fatal ? 1 : 0);
-                if (contact.hitstop_seconds > hitstop_remaining) {
-                    hitstop_remaining = contact.hitstop_seconds;
-                }
-                if (contact.shake > 0.0f) {
-                    const hue::Vec3 attacker_feet = physics.value().character_position(
-                        attacker == 0 ? player_body.value() : enemy_body.value());
-                    const hue::Vec3 defender_feet = physics.value().character_position(
-                        defender == 0 ? player_body.value() : enemy_body.value());
-                    hue::Vec3 dir{defender_feet.x - attacker_feet.x, 0.25f,
-                                  defender_feet.z - attacker_feet.z};
-                    if (length_squared(dir) > 0.0001f) {
-                        follow_camera.add_impulse(normalize(dir) * (contact.shake * 6.0f));
-                    }
-                }
-            };
-            try_strike(0, 1, player_entity, enemy_entity);
-            try_strike(1, 0, enemy_entity, player_entity);
-
-            if (const auto flushed = world.flush(); !flushed) {
-                HUE_LOG_ERROR("ecs flush failed");
+        }
+        if (!world.flush())
+            return 1;
+        const hue::ecs::Entity actors[2] = {player_entity, enemy_entity};
+        for (std::uint32_t i = 0; i < 2; ++i) {
+            auto* transform = transform_pool.value()->get(actors[i]);
+            if (transform == nullptr)
+                return 1;
+            transform->position = encounter.position(i);
+            transform->yaw = encounter.yaw(i);
+        }
+        if (encounter_smoke && frames % 120 == 119) {
+            const auto expected =
+                (frames / 120) % 2 == 0 ? EncounterState::kWon : EncounterState::kLost;
+            if (encounter.state() != expected || encounter.locked() ||
+                physics.value().character_count() != 2 || world.alive_count() != 2) {
+                HUE_LOG_ERROR("encounter smoke failed at cycle %lld", frames / 120);
                 return 1;
             }
         }
@@ -1043,11 +788,11 @@ int main(int argc, char** argv) {
             hue::ecs::for_each(
                 *draw_pool.value(), *transform_pool.value(),
                 [&](hue::ecs::Entity, DrawComponent& draw, TransformComponent& transform) {
-                    draws[draw.index].transform = hue::Mat4::trs(
-                        transform.position,
-                        hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
-                                                   transform.yaw + kModelYawOffset),
-                        {1.0f, 1.0f, 1.0f});
+                    draws[draw.index].transform =
+                        hue::Mat4::trs(transform.position,
+                                       hue::Quat::from_axis_angle({0.0f, 1.0f, 0.0f},
+                                                                  transform.yaw + kModelYawOffset),
+                                       {1.0f, 1.0f, 1.0f});
                 });
 
             if (use_fly_camera) {
@@ -1058,18 +803,17 @@ int main(int argc, char** argv) {
                     hue::Vec3{0.0f, 1.2f, 0.0f}; // chest height frames better than feet
                 follow_camera.update(input, static_cast<float>(frame_seconds),
                                      physics.value().character_position(player_body.value()),
-                                     physics.value(), lock_on ? &lock_point : nullptr);
+                                     physics.value(), encounter.locked() ? &lock_point : nullptr);
             }
             const hue::RendererStatus& render_status = renderer.value().status();
-            const float aspect =
-                render_status.swapchain_height > 0
-                    ? static_cast<float>(render_status.swapchain_width) /
-                          static_cast<float>(render_status.swapchain_height)
-                    : 16.0f / 9.0f;
-            const hue::Camera camera = use_fly_camera ? fly_camera.camera(aspect)
-                                                      : follow_camera.camera(aspect);
+            const float aspect = render_status.swapchain_height > 0
+                                     ? static_cast<float>(render_status.swapchain_width) /
+                                           static_cast<float>(render_status.swapchain_height)
+                                     : 16.0f / 9.0f;
+            const hue::Camera camera =
+                use_fly_camera ? fly_camera.camera(aspect) : follow_camera.camera(aspect);
 
-            hue::HudQuad hud[hue::kMaxHudQuads];
+            static hue::HudQuad hud[hue::kMaxHudQuads];
             std::uint32_t hud_count = 0;
             const float ratio_player =
                 combat_characters[0] ? combat_characters[0]->health_ratio() : 0.0f;
@@ -1079,18 +823,15 @@ int main(int argc, char** argv) {
             const hue::Vec4 fill_enemy{0.90f, 0.26f, 0.32f, 0.94f};
             append_health_bar(hud, hud_count, -0.92f, 0.84f, -0.10f, 0.94f, ratio_player,
                               fill_player);
-            append_health_bar(hud, hud_count, 0.10f, 0.84f, 0.92f, 0.94f, ratio_enemy,
-                              fill_enemy);
+            append_health_bar(hud, hud_count, 0.10f, 0.84f, 0.92f, 0.94f, ratio_enemy, fill_enemy);
 
             const hue::RendererStatus& hud_status = render_status;
-            const float pixel_x =
-                hud_status.swapchain_width > 0
-                    ? 2.0f / static_cast<float>(hud_status.swapchain_width)
-                    : 2.0f / 1280.0f;
-            const float pixel_y =
-                hud_status.swapchain_height > 0
-                    ? 2.0f / static_cast<float>(hud_status.swapchain_height)
-                    : 2.0f / 720.0f;
+            const float pixel_x = hud_status.swapchain_width > 0
+                                      ? 2.0f / static_cast<float>(hud_status.swapchain_width)
+                                      : 2.0f / 1280.0f;
+            const float pixel_y = hud_status.swapchain_height > 0
+                                      ? 2.0f / static_cast<float>(hud_status.swapchain_height)
+                                      : 2.0f / 720.0f;
             const struct {
                 std::uint32_t body;
                 float ratio;
@@ -1113,10 +854,16 @@ int main(int argc, char** argv) {
                                   bar.fill);
             }
 
+            append_combat_hud(hud, hud_count, camera, encounter, *combat_characters[0],
+                              *combat_characters[1], diagnostics, frame_seconds * 1000.0,
+                              animation_arena.value().high_water_mark(), world.alive_count(),
+                              physics.value().character_count());
             const auto drawn =
                 renderer.value().draw_frame(camera, draws, draw_count, hud, hud_count);
             if (!drawn) {
                 HUE_LOG_ERROR("draw_frame failed; rendering disabled for this run");
+                if (require_renderer || encounter_smoke)
+                    return 1;
                 renderer_active = false;
 #if defined(HUE_DEBUG_CHANNEL)
                 debug_context.renderer = nullptr;
@@ -1145,6 +892,18 @@ int main(int argc, char** argv) {
             break;
     }
 
+    if (frame_sample_count > 0) {
+        std::sort(frame_samples, frame_samples + frame_sample_count);
+        HUE_LOG_INFO("performance_summary samples=%zu p50_ms=%.3f p95_ms=%.3f pose_peak=%zu",
+                     frame_sample_count, frame_samples[frame_sample_count / 2],
+                     frame_samples[(frame_sample_count - 1) * 95 / 100],
+                     animation_arena.value().high_water_mark());
+    }
+    if (encounter_smoke) {
+        if (frames != 2400)
+            return 1;
+        HUE_LOG_INFO("encounter_smoke PASS: 20 resets, alternating outcomes, diagnostics on/off");
+    }
     allocation_reporter.flush();
     HUE_LOG_INFO("shutdown after %lld frames, %lld sim steps", frames, timestep.total_steps());
     return 0;

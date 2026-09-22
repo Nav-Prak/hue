@@ -42,6 +42,8 @@ public:
     double alpha() const { return m_accumulator / kTickSeconds; }
 
     long long total_steps() const { return m_total_steps; }
+    // Drop pre-restart fractional time without resetting lifetime diagnostics.
+    void reset_accumulator() noexcept { m_accumulator = 0.0; }
 
 private:
     double m_accumulator = 0.0;

@@ -46,6 +46,10 @@ Result<Window> Window::create(const WindowDesc& desc) {
     }
 
     Window window;
+    // A tap can begin and end in one poll_events() batch. Preserve it until
+    // Input snapshots the state instead of losing short start/attack presses.
+    glfwSetInputMode(handle, GLFW_STICKY_KEYS, GLFW_TRUE);
+    glfwSetInputMode(handle, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
     window.m_window.reset(handle);
     return window;
 }

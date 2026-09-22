@@ -29,8 +29,8 @@ remote code execution via gameplay netcode.
 | SPIR-V shaders (reload) | `hue::validate_spirv_bytes` | Week 4 boundary check; full reflection hardening in Week 14 |
 | Textures / images (PNG/JPEG) | `load_gltf` / `load_gltf_skinned` | **Week 6** — decoded via stb_image behind caps, fuzzed |
 | Skinned / animated glTF | `hue::asset::load_gltf_skinned` | **Weeks 6–7** — skeleton/clip validation, fuzzed, bounded sampling + GPU palettes |
-| Animation event JSON | `hue::anim::parse_animation_events` | **Week 7** — 64 KiB/256-event caps, strict schema, clip/time validation |
-| Scene JSON | (not yet) | Week 12 |
+| Animation event JSON | `hue::anim::parse_animation_events` | **Weeks 7/12** — 64 KiB/256-event caps, strict schema, clip/time validation; dedicated parser/semantic-validation fuzz target registered in CI |
+| Scene JSON | (not yet) | Week 13, after encounter lifecycle acceptance; code-authored scene remains the scope fallback |
 | Combat tuning JSON | (not yet) | Week 14 |
 
 ### glTF loader trust boundary (Week 5)
@@ -119,6 +119,17 @@ Defenses:
    caps file/event/string sizes, rejects non-finite or negative times, then
    verifies every event against a real clip and its duration.
 
+Week 12 adds `tools/fuzz/fuzz_animation_events.cpp`: memory-only parsing followed
+by semantic validation against a small fixed clip set. Seeds live in
+`tools/fuzz/corpus/animation_events`; Linux CI schedules 60 seconds under
+ASan/UBSan. Local Windows Clang/ASan smoke results and limits are recorded in
+[the Week 12 notes](week12.md), not presented as a Linux CI result.
+
+The game copies sampled global/skinning matrices into fixed-capacity actor-owned
+storage before resetting scratch memory. Zero-simulation-tick and hitstop frames
+therefore do not retain expired frame-arena pointers. This ownership regression
+is tested separately from parser fuzzing.
+
 ### Physics collision cooking boundary (Week 8)
 
 Static collision is cooked from the same mesh data the renderer draws
@@ -168,7 +179,11 @@ as untrusted text (bounded buffers, no `std::string` growth from input).
 
 ## Deferred
 
-- Scene description JSON (capped counts, validated references) + dedicated
-  fuzz harness — Week 12
-- Shader hot-reload reflection validation + fuzz — Week 14
+- Scene description JSON (versioned, capped counts, validated references,
+  transactional scene creation) + dedicated fuzz harness — Week 13;
+  defer both if the optional loader is cut, retaining code-authored scenes
+- Shader hot-reload reflection validation + CPU-side validator fuzzing,
+  with separate GPU reload/resource-lifetime tests — Week 14
+- Bounded combat-tuning JSON and safe-boundary commit + dedicated parser
+  fuzz target — Week 14
 - Extended 24–48h fuzz campaign, crash taxonomy, published model — Week 18

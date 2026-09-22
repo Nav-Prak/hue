@@ -16,8 +16,7 @@
 class FollowCamera {
 public:
     void update(const hue::Input& input, float dt, hue::Vec3 target_feet,
-                const hue::physics::PhysicsWorld& physics,
-                const hue::Vec3* lock_target = nullptr);
+                const hue::physics::PhysicsWorld& physics, const hue::Vec3* lock_target = nullptr);
 
     // Combat feel: a world-space spring impulse on the camera (hitstop
     // shake). Damps out through the same critically-damped helper as the pivot.
@@ -30,8 +29,8 @@ public:
 private:
     [[nodiscard]] hue::Vec3 forward() const;
 
-    float m_yaw = 3.05f;    // radians around +Y; starts looking back at spawn
-    float m_pitch = -0.30f; // negative looks down at the character
+    float m_yaw = -hue::kPi * 0.5f; // start behind player, facing the opponent (+X)
+    float m_pitch = -0.30f;         // negative looks down at the character
     float m_arm_length = 4.0f;
     hue::Vec3 m_pivot{-0.8f, 1.5f, 3.0f};
     hue::Vec3 m_pivot_velocity{};

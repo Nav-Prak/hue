@@ -51,7 +51,7 @@ struct MeshDraw {
 // point lights). radius bounds the falloff window; intensity scales the
 // linear-space color.
 inline constexpr std::uint32_t kMaxPointLights = 4;
-inline constexpr std::uint32_t kMaxHudQuads = 32;
+inline constexpr std::uint32_t kMaxHudQuads = 8192;
 
 // Screen-space colored rectangle in engine NDC (Y-up, matching the
 // negative-viewport 3D pass). Drawn after meshes with depth off.
@@ -59,6 +59,8 @@ struct HudQuad {
     Vec2 ndc_min{};
     Vec2 ndc_max{};
     Vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
+    // Off-diagonal basis for projected debug lines; zero keeps rectangles.
+    Vec2 skew{};
 };
 
 struct PointLight {

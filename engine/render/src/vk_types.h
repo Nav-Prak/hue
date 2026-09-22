@@ -185,8 +185,11 @@ struct HudPushConstants {
     float g = 1.0f;
     float b = 1.0f;
     float a = 1.0f;
+    float skew_x = 0.0f;
+    float skew_y = 0.0f;
+    float padding[2]{};
 };
-static_assert(sizeof(HudPushConstants) == 32);
+static_assert(sizeof(HudPushConstants) == 48);
 
 // context.cpp
 Result<void> context_create(ContextState& context, GLFWwindow* window, bool enable_validation);

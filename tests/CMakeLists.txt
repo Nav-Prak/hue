@@ -14,6 +14,7 @@ add_executable(hue_tests
     combat/test_combat.cpp
     combat/test_hit_volumes.cpp
     combat/test_ai.cpp
+    game/test_encounter.cpp
     ecs/test_ecs.cpp
     physics/test_physics.cpp
     core/bench_math.cpp
@@ -40,7 +41,7 @@ target_compile_definitions(hue_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WI
 target_compile_definitions(hue_tests PRIVATE
     HUE_TEST_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tools/fuzz/corpus/gltf"
     HUE_TEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/assets/models")
-target_link_libraries(hue_tests PRIVATE hue_core hue::asset hue::anim hue::combat hue::ecs hue::physics hue::render doctest::doctest hue::options)
+target_link_libraries(hue_tests PRIVATE hue_gameplay hue_core hue::asset hue::anim hue::combat hue::ecs hue::physics hue::render doctest::doctest hue::options)
 if(MSVC)
     # VS 2026 warns on doctest 2.4.12's intentional std::tuple specialization.
     # Keep the suppression scoped to the third-party test harness consumer.
@@ -74,6 +75,11 @@ set_tests_properties(renderer_smoke PROPERTIES
     LABELS "render;smoke"
     TIMEOUT 90
     SKIP_REGULAR_EXPRESSION "HUE_RENDERER_UNAVAILABLE")
+
+add_test(NAME encounter_smoke
+    COMMAND ${CMAKE_COMMAND} -DHUE_GAME=$<TARGET_FILE:hue_game>
+        -P ${PROJECT_SOURCE_DIR}/cmake/RunEncounterSmoke.cmake)
+set_tests_properties(encounter_smoke PROPERTIES LABELS "game;smoke" TIMEOUT 180)
 
 # End-to-end debug channel test: Python drives a live game over TCP.
 if(HUE_DEBUG_CHANNEL)

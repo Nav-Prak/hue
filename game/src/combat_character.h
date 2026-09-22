@@ -9,6 +9,7 @@
 #pragma once
 
 #include "hue/anim/animation.h"
+#include "hue/asset/gltf_loader.h"
 #include "hue/asset/mesh_data.h"
 #include "hue/combat/combat.h"
 #include "hue/core/memory.h"
@@ -30,6 +31,10 @@ public:
     CombatCharacter& operator=(const CombatCharacter&) = delete;
 
     [[nodiscard]] hue::Result<void> initialize();
+    [[nodiscard]] hue::Result<void> reset(hue::LinearArena& arena, hue::MeshDraw* draws);
+    // Terminal presentation advances clips without consuming buffered actions.
+    [[nodiscard]] hue::Result<void> present(float dt, hue::LinearArena& arena,
+                                            hue::MeshDraw* draws);
 
     // Records a pressed action; the machine buffers and consumes it at the
     // next legal moment (cancel window, state end, or immediately).
@@ -42,7 +47,8 @@ public:
     // hit entirely. apply_damage always staggers; apply_strike uses poise
     // so chip hits can land without a hit-react.
     void apply_damage(float amount) noexcept;
-    [[nodiscard]] hue::combat::StrikeContact apply_strike(const hue::combat::Strike& strike) noexcept;
+    [[nodiscard]] hue::combat::StrikeContact
+    apply_strike(const hue::combat::Strike& strike) noexcept;
     void notify_hit(bool fatal) noexcept {
         m_pending_hit = true;
         m_pending_fatal = m_pending_fatal || fatal;
@@ -66,9 +72,24 @@ public:
         return m_max_health > 0.0f ? m_health / m_max_health : 0.0f;
     }
     [[nodiscard]] float poise() const noexcept { return m_poise; }
+    [[nodiscard]] bool cancel_open() const noexcept { return m_machine.cancel_open(); }
+    [[nodiscard]] hue::combat::Action buffered_action() const noexcept {
+        return m_machine.buffered_action();
+    }
+    [[nodiscard]] bool strike_window() const noexcept { return m_strike_window; }
+    [[nodiscard]] std::uint64_t activation() const noexcept { return m_activation; }
+    [[nodiscard]] const hue::combat::BoundVolumeSet& hitboxes() const noexcept {
+        return m_hitboxes;
+    }
+    [[nodiscard]] const hue::combat::BoundVolumeSet& hurtboxes() const noexcept {
+        return m_hurtboxes;
+    }
+    [[nodiscard]] hue::Mat4 volume_transform(const hue::Mat4& model,
+                                             const hue::combat::BoundVolume& volume) const noexcept;
 
 private:
     [[nodiscard]] hue::Result<void> start_state_clip(hue::combat::State state);
+    void retain_pose(const hue::anim::AnimationFrame& frame, hue::MeshDraw* draws) noexcept;
 
     hue::asset::SkinnedMeshData m_data;
     hue::anim::AnimationEventTrack m_events;
@@ -97,6 +118,10 @@ private:
 
     hue::combat::BoundVolumeSet m_hitboxes{};
     hue::combat::BoundVolumeSet m_hurtboxes{};
-    const hue::Mat4* m_globals = nullptr;
+    // Never retain scratch pointers across ticks/frames (including hitstop).
+    hue::Mat4 m_globals[hue::asset::kGltfMaxJoints]{};
+    hue::Mat4 m_skinning[hue::asset::kGltfMaxJoints]{};
     std::uint32_t m_joint_count = 0;
+    std::uint64_t m_activation = 0;
+    bool m_strike_window = false;
 };

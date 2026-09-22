@@ -438,6 +438,8 @@ void state_destroy(Renderer::State& state) {
             push.g = hud[i].color.y;
             push.b = hud[i].color.z;
             push.a = hud[i].color.w;
+            push.skew_x = hud[i].skew.x;
+            push.skew_y = hud[i].skew.y;
             vkCmdPushConstants(cmd, state.pipeline.hud_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
                                sizeof(push), &push);
             vkCmdDraw(cmd, 6, 1, 0, 0);

@@ -403,9 +403,25 @@ void PhysicsWorld::set_character_velocity(std::uint32_t character,
         JPH::Vec3(planar_velocity.x, 0.0f, planar_velocity.z);
 }
 
+Result<void> PhysicsWorld::reset_character(std::uint32_t character, Vec3 feet) noexcept {
+    if (m_state == nullptr || character >= m_state->character_count ||
+        !std::isfinite(feet.x) || !std::isfinite(feet.y) || !std::isfinite(feet.z)) {
+        return ErrorCode::kInvalidArgument;
+    }
+    auto& slot = m_state->characters[character];
+    slot.desired_velocity = JPH::Vec3::sZero();
+    slot.character->SetPosition(JPH::RVec3(to_jolt(feet)));
+    slot.character->SetLinearVelocity(JPH::Vec3::sZero());
+    slot.character->RefreshContacts(
+        m_state->system.GetDefaultBroadPhaseLayerFilter(layers::kMoving),
+        m_state->system.GetDefaultLayerFilter(layers::kMoving), {}, {},
+        m_state->temp_allocator);
+    return {};
+}
+
 Result<void> PhysicsWorld::update(float delta_seconds) noexcept {
     HUE_PROFILE_ZONE("physics::update");
-    if (m_state == nullptr || delta_seconds <= 0.0f) {
+    if (m_state == nullptr || !std::isfinite(delta_seconds) || delta_seconds <= 0.0f) {
         return ErrorCode::kInvalidArgument;
     }
 

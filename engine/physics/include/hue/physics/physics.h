@@ -61,6 +61,8 @@ public:
 
     // Desired planar velocity for the next update; gravity is engine-managed.
     void set_character_velocity(std::uint32_t character, Vec3 planar_velocity) noexcept;
+    // Reuses the existing controller; clears motion and refreshes ground contacts.
+    [[nodiscard]] Result<void> reset_character(std::uint32_t character, Vec3 feet) noexcept;
 
     // Fixed-tick step: integrates gravity, moves every character with slope
     // and stair handling, and steps the (static) simulation.
