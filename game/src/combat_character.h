@@ -77,6 +77,7 @@ public:
         return m_machine.buffered_action();
     }
     [[nodiscard]] bool strike_window() const noexcept { return m_strike_window; }
+    [[nodiscard]] float buffer_remaining() const noexcept { return m_machine.buffer_remaining(); }
     [[nodiscard]] std::uint64_t activation() const noexcept { return m_activation; }
     [[nodiscard]] const hue::combat::BoundVolumeSet& hitboxes() const noexcept {
         return m_hitboxes;

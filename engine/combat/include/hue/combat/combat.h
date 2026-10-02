@@ -174,6 +174,9 @@ public:
     [[nodiscard]] bool hitbox_active() const noexcept { return m_hitbox_active; }
     [[nodiscard]] bool cancel_open() const noexcept { return m_cancel_open; }
     [[nodiscard]] Action buffered_action() const noexcept { return m_buffered; }
+    [[nodiscard]] float buffer_remaining() const noexcept {
+        return m_buffered == Action::kNone ? 0.0f : hue::clamp(m_tuning.input_buffer_seconds - m_buffered_age, 0.0f, m_tuning.input_buffer_seconds);
+    }
     [[nodiscard]] bool alive() const noexcept { return m_state != State::kDeath; }
 
 private:

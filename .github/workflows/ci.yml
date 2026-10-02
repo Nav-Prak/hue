@@ -89,7 +89,7 @@ jobs:
           -DHUE_FUZZ=ON
           -DHUE_TRACY_ENABLE=OFF
       - name: Build parser fuzzers
-        run: cmake --build --preset linux-sanitized --target fuzz_gltf fuzz_animation_events
+        run: cmake --build --preset linux-sanitized --target fuzz_gltf fuzz_animation_events fuzz_scene
       - name: Fuzz glTF import (60s)
         run: >
           mkdir -p artifacts &&
@@ -108,10 +108,16 @@ jobs:
           -timeout=10
           -rss_limit_mb=2048
           -artifact_prefix=artifacts/
-      - name: Upload crash artifacts
+      - name: Fuzz scene configuration (60s)
+        run: >
+          mkdir -p artifacts &&
+          ./build/linux-clang-sanitized/tools/fuzz/fuzz_scene
+          tools/fuzz/corpus/scene -max_total_time=60 -max_len=4097
+          -timeout=10 -rss_limit_mb=2048 -artifact_prefix=artifacts/
+      - name: Upload parser crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-gltf-artifacts
+          name: fuzz-parser-artifacts
           path: artifacts/
           if-no-files-found: ignore

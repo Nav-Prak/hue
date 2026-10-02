@@ -18,6 +18,7 @@
 #include "encounter.h"
 #include "fly_camera.h"
 #include "follow_camera.h"
+#include "runtime_files.h"
 #include "test_meshes.h"
 
 #include "hue/anim/animation.h"
@@ -406,6 +407,9 @@ int main(int argc, char** argv) {
     long long max_frames = -1; // run until closed
     bool require_renderer = false;
     bool encounter_smoke = false;
+    char scene_path[1024];
+    if (!runtime_path(scene_path, sizeof(scene_path), "assets/config/arena.json"))
+        return 1;
     bool debug_channel_requested = false;
     [[maybe_unused]] std::uint32_t debug_channel_port = hue::kDebugChannelDefaultPort;
     for (int i = 1; i < argc; ++i) {
@@ -425,6 +429,17 @@ int main(int argc, char** argv) {
                 debug_channel_port = parsed_port;
             }
         }
+    }
+
+    auto scene_bytes = read_config_file(scene_path);
+    if (!scene_bytes) {
+        HUE_LOG_ERROR("scene file unavailable: %s", scene_path);
+        return 1;
+    }
+    auto initial_scene = parse_scene(scene_bytes.value().data, scene_bytes.value().size);
+    if (!initial_scene) {
+        HUE_LOG_ERROR("invalid scene: %s", scene_path);
+        return 1;
     }
 
     auto platform = hue::Platform::create();
@@ -668,9 +683,11 @@ int main(int argc, char** argv) {
 
     Encounter encounter(physics.value(), *combat_characters[0], *combat_characters[1],
                         player_body.value(), enemy_body.value(), follow_camera);
+    if (!encounter.stage_scene(initial_scene.value()))
+        return 1;
     if (!encounter.reset(animation_arena.value(), draws))
         return 1;
-    bool diagnostics = false;
+    unsigned diagnostics = 0;
     double frame_samples[4096]{};
     std::size_t frame_sample_count = 0;
     std::size_t frame_sample_cursor = 0;
@@ -704,7 +721,18 @@ int main(int argc, char** argv) {
         if (frame_sample_count < 4096)
             ++frame_sample_count;
         if (input.key_pressed(hue::key::kF2) || input.pad_pressed(hue::pad::kBack))
-            diagnostics = !diagnostics;
+            diagnostics = (diagnostics + 1) % 3;
+        if (input.key_pressed(hue::key::kF5)) {
+            auto bytes = read_config_file(scene_path);
+            if (bytes) {
+                auto candidate = parse_scene(bytes.value().data, bytes.value().size);
+                if (candidate && encounter.stage_scene(candidate.value()))
+                    HUE_LOG_INFO("scene accepted; applies on next restart");
+                else
+                    HUE_LOG_WARN("scene rejected; current and pending scene unchanged");
+            } else
+                HUE_LOG_WARN("scene read failed; current and pending scene unchanged");
+        }
 
         const bool begin =
             input.key_pressed(hue::key::kEnter) || input.pad_pressed(hue::pad::kStart);
@@ -729,7 +757,7 @@ int main(int argc, char** argv) {
                 encounter.buffer(hue::combat::Action::kAttackHeavy);
             if (frames % 120 == 60)
                 combat_characters[(frames / 120) % 2 == 0 ? 1 : 0]->apply_damage(1000.0f);
-            diagnostics = (frames / 120) % 2 != 0;
+            diagnostics = static_cast<unsigned>((frames / 120) % 3);
         }
 
         // Combat input: presses buffer into the state machine, which

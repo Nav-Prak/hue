@@ -27,6 +27,7 @@ inline constexpr int kW = 87;
 inline constexpr int kEscape = 256;
 inline constexpr int kF1 = 290;
 inline constexpr int kF2 = 291;
+inline constexpr int kF5 = 294;
 inline constexpr int kEnter = 257;
 inline constexpr int kR = 82;
 inline constexpr int kRight = 262;

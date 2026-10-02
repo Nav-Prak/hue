@@ -6,5 +6,5 @@
 
 void append_combat_hud(hue::HudQuad* quads, std::uint32_t& count, const hue::Camera& camera,
                        const Encounter& encounter, const CombatCharacter& player,
-                       const CombatCharacter& enemy, bool diagnostics, double frame_ms,
+                       const CombatCharacter& enemy, unsigned diagnostics, double frame_ms,
                        std::size_t arena_peak, std::size_t entities, std::uint32_t bodies);

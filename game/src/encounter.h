@@ -8,6 +8,7 @@
 #include "follow_camera.h"
 #include "hue/combat/ai.h"
 #include "hue/core/time.h"
+#include "scene_config.h"
 
 inline constexpr hue::Vec3 kEncounterSpawns[2] = {{-0.8f, 0.05f, 3.0f}, {0.8f, 0.05f, 3.0f}};
 inline constexpr float kEncounterYaw[2] = {-hue::kPi * 0.5f, hue::kPi * 0.5f};
@@ -31,6 +32,14 @@ public:
     void start() noexcept;
     void buffer(hue::combat::Action action) noexcept;
     void toggle_lock() noexcept;
+    // Candidate changes are validated immediately and only applied at reset.
+    [[nodiscard]] bool stage_scene(const SceneConfig& scene) noexcept;
+    [[nodiscard]] const SceneConfig& scene() const noexcept { return m_scene; }
+    [[nodiscard]] bool scene_pending() const noexcept { return m_scene_pending; }
+    [[nodiscard]] const hue::combat::Perception& perception() const noexcept {
+        return m_perception;
+    }
+    [[nodiscard]] const hue::combat::Brain& brain() const noexcept { return m_brain; }
     [[nodiscard]] hue::Result<void> tick(hue::Vec3 movement, hue::LinearArena& arena,
                                          hue::MeshDraw* draws);
     [[nodiscard]] EncounterState state() const noexcept { return m_state; }
@@ -50,6 +59,9 @@ private:
     hue::combat::Brain m_brain{{}, 2026u};
     EncounterState m_state = EncounterState::kReady;
     FightStats m_stats{};
+    SceneConfig m_scene{}, m_next_scene{};
+    bool m_scene_pending = false;
+    hue::combat::Perception m_perception{};
     float m_yaw[2] = {kEncounterYaw[0], kEncounterYaw[1]};
     hue::Vec3 m_dodge_direction{};
     hue::combat::State m_previous_state = hue::combat::State::kLocomotion;

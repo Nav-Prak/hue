@@ -15,6 +15,7 @@ add_executable(hue_tests
     combat/test_hit_volumes.cpp
     combat/test_ai.cpp
     game/test_encounter.cpp
+    game/test_config.cpp
     ecs/test_ecs.cpp
     physics/test_physics.cpp
     core/bench_math.cpp

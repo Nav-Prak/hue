@@ -66,6 +66,9 @@ public:
     [[nodiscard]] bool entered() const noexcept { return m_entered; }
     [[nodiscard]] Action last_attack() const noexcept { return m_last_attack; }
     [[nodiscard]] float state_seconds() const noexcept { return m_state_seconds; }
+    [[nodiscard]] float light_cooldown() const noexcept { return m_light_cd > 0 ? m_light_cd : 0; }
+    [[nodiscard]] float heavy_cooldown() const noexcept { return m_heavy_cd > 0 ? m_heavy_cd : 0; }
+    [[nodiscard]] float los_lost_seconds() const noexcept { return m_los_lost_seconds; }
 
 private:
     void enter(AiState next) noexcept;

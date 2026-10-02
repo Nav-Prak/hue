@@ -2,6 +2,15 @@
 
 **July 6 → November 19, 2026.** Twenty numbered weeks; the final week is four days. From-scratch C++20/Vulkan third-person combat runtime, built in public. November 19 is Hue's project target, independent of external release schedules.
 
+## Engineering sequencing update — October 2, 2026
+
+The owner authorized proceeding through independent engineering milestones,
+ignoring calendar dates. Local commits record tested implementation; external
+playtest, clean-machine, supported-platform and sustained-campaign gates remain
+separate and must not be inferred from those commits. The earlier requirement to
+wait for full external acceptance before scene/tools implementation is superseded.
+See [Week 13 engineering evidence](week13.md). Nothing is published automatically.
+
 ## Implementation update — September 22, 2026
 
 Week 12 code is integrated: encounter lifecycle/reset, owned last-pose storage,

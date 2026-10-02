@@ -50,6 +50,11 @@ Encounter::Encounter(hue::physics::PhysicsWorld& physics, CombatCharacter& playe
 hue::Result<void> Encounter::reset(hue::LinearArena& arena, hue::MeshDraw* draws) {
     HUE_PROFILE_ZONE("game::Encounter::reset");
     m_state = EncounterState::kReady;
+    if (m_scene_pending) {
+        m_scene = m_next_scene;
+        m_scene_pending = false;
+    }
+    m_perception = {};
     m_stats = {};
     m_brain = hue::combat::Brain{{}, 2026u};
     m_pending = hue::combat::Action::kNone;
@@ -59,9 +64,9 @@ hue::Result<void> Encounter::reset(hue::LinearArena& arena, hue::MeshDraw* draws
     m_previous_state = hue::combat::State::kLocomotion;
     m_camera = FollowCamera{};
     for (std::uint32_t i = 0; i < 2; ++i) {
-        m_yaw[i] = kEncounterYaw[i];
+        m_yaw[i] = m_scene.yaw[i];
         m_consumed[i] = 0;
-        auto body = m_physics.reset_character(m_bodies[i], kEncounterSpawns[i]);
+        auto body = m_physics.reset_character(m_bodies[i], m_scene.spawns[i]);
         if (!body)
             return body.error();
         arena.reset();
@@ -70,6 +75,14 @@ hue::Result<void> Encounter::reset(hue::LinearArena& arena, hue::MeshDraw* draws
             return actor.error();
     }
     return {};
+}
+
+bool Encounter::stage_scene(const SceneConfig& scene) noexcept {
+    if (!valid_scene(scene))
+        return false;
+    m_next_scene = scene;
+    m_scene_pending = true;
+    return true;
 }
 
 void Encounter::start() noexcept {
@@ -128,6 +141,7 @@ hue::Result<void> Encounter::tick(hue::Vec3 movement, hue::LinearArena& arena,
     perception.distance = length(to_player);
     perception.to_target = to_player;
     perception.self_state = m_actors[1]->state();
+    m_perception = perception;
     const auto command = m_brain.update(kTick, perception);
     m_actors[1]->buffer_action(command.action);
 

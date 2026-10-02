@@ -278,4 +278,44 @@ TEST_CASE("encounter HUD: bounded finite quads with diagnostics and capacity exh
                       2, 2);
     CHECK(count == hue::kMaxHudQuads);
     CHECK(quads.back().ndc_min.x == 1234.0f);
+    count = 0;
+    append_combat_hud(quads.data(), count, {}, *f.session, *f.actors[0], *f.actors[1], 2, 16.6,
+                      16384, 2, 2);
+    CHECK(count < hue::kMaxHudQuads);
+}
+
+TEST_CASE("encounter: scene staging preserves live state and rejects invalid candidates") {
+    Fixture f;
+    f.session->start();
+    f.tick();
+    const auto before = f.session->position(0);
+    SceneConfig candidate;
+    candidate.spawns[0] = {-2, 0.05f, 3};
+    REQUIRE(f.session->stage_scene(candidate));
+    CHECK(f.session->scene_pending());
+    CHECK(f.session->position(0).x == before.x);
+    candidate.spawns[0] = {0, 0, 0};
+    CHECK_FALSE(f.session->stage_scene(candidate));
+    CHECK(f.session->scene().spawns[0].x == doctest::Approx(-0.8));
+    for (int i = 0; i < 20; ++i) {
+        f.reset();
+        CHECK(f.session->position(0).x == -2);
+        CHECK_FALSE(f.session->scene_pending());
+        CHECK(f.physics.value().character_count() == 2);
+    }
+}
+
+TEST_CASE("encounter: diagnostics retain last AI sense and reset cooldowns") {
+    Fixture f;
+    f.session->start();
+    for (int i = 0; i < 30; ++i)
+        f.tick();
+    CHECK(f.session->perception().line_of_sight);
+    CHECK(f.session->perception().distance > 0);
+    CHECK(f.session->brain().light_cooldown() >= 0);
+    CHECK(f.session->brain().heavy_cooldown() >= 0);
+    f.reset();
+    CHECK(f.session->brain().light_cooldown() == 0);
+    CHECK(f.session->brain().heavy_cooldown() == 0);
+    CHECK(f.session->perception().distance == 0);
 }

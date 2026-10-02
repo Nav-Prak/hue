@@ -2,6 +2,9 @@
 include(${CMAKE_SOURCE_DIR}/cmake/HueShaders.cmake)
 
 add_library(hue_gameplay STATIC
+    src/config_json.cpp
+    src/scene_config.cpp
+    src/runtime_files.cpp
     src/encounter.cpp
     src/combat_hud.cpp
     src/combat_character.cpp
@@ -42,3 +45,6 @@ add_custom_command(TARGET hue_game POST_BUILD
         $<TARGET_FILE_DIR:hue_game>/assets/models
     COMMENT "Staging character models"
 )
+add_custom_command(TARGET hue_game POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/config $<TARGET_FILE_DIR:hue_game>/assets/config)

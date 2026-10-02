@@ -177,11 +177,25 @@ Defenses:
 These are not remote attack surfaces. They still treat every command line
 as untrusted text (bounded buffers, no `std::string` growth from input).
 
-## Deferred
+## Scene configuration
 
-- Scene description JSON (versioned, capped counts, validated references,
-  transactional scene creation) + dedicated fuzz harness — Week 13;
-  defer both if the optional loader is cut, retaining code-authored scenes
+The game reads an executable-relative `assets/config/arena.json` at startup and
+on F5. `game/src/config_json.cpp` is a 4 KiB, allocation-free flat JSON subset:
+32 fields, 47-byte ASCII keys/strings, four numeric elements per array; duplicate
+keys, malformed number grammar, nonfinite values, escapes/nesting and trailing
+data fail. `scene_config.cpp` requires the exact versioned schema and approved
+arena/rig IDs, never file paths. Two finite, separated spawns are confined to the
+existing arena's clear staging strip. This is not a general scene deserializer.
+
+Validation precedes staging. An invalid candidate cannot alter the live or
+pending scene. Accepted transforms apply on reset with existing resources; no
+new bodies/assets/entities accumulate. Required startup files fail closed.
+Tests exercise truncation, invalid references/geometry and transactional staging.
+`fuzz_scene` is memory-only with seeds and a 60-second CI invocation. See
+[actual local verification](week13.md); registered CI is not evidence of a CI run.
+
+## Remaining deferred boundaries
+
 - Shader hot-reload reflection validation + CPU-side validator fuzzing,
   with separate GPU reload/resource-lifetime tests — Week 14
 - Bounded combat-tuning JSON and safe-boundary commit + dedicated parser

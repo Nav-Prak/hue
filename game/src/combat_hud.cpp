@@ -47,8 +47,11 @@ void text(hue::HudQuad* q, std::uint32_t& n, float x, float y, const char* messa
           float scale = 1.0f) {
     const float px = 0.0027f * scale, py = 0.0048f * scale;
     for (unsigned i = 0; message[i] != '\0' && i < 160; ++i) {
-        for (int row = 0; row < 7; ++row) {
+        for (int row = 0; row < 7;) {
             const unsigned bits = glyph_row(message[i], row);
+            int end_row = row + 1;
+            while (end_row < 7 && glyph_row(message[i], end_row) == bits)
+                ++end_row;
             for (int col = 0; col < 5;) {
                 if ((bits & (1u << static_cast<unsigned>(4 - col))) == 0) {
                     ++col;
@@ -58,10 +61,11 @@ void text(hue::HudQuad* q, std::uint32_t& n, float x, float y, const char* messa
                 while (col < 5 && (bits & (1u << static_cast<unsigned>(4 - col))) != 0)
                     ++col;
                 quad(q, n,
-                     {x + static_cast<float>(begin) * px, y - static_cast<float>(row + 1) * py},
+                     {x + static_cast<float>(begin) * px, y - static_cast<float>(end_row) * py},
                      {x + static_cast<float>(col) * px, y - static_cast<float>(row) * py},
                      {0.94f, 0.96f, 1.0f, 1.0f});
             }
+            row = end_row;
         }
         x += px * 6.0f;
     }
@@ -119,14 +123,14 @@ void volumes(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& camera,
 
 void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& camera,
                        const Encounter& encounter, const CombatCharacter& player,
-                       const CombatCharacter& enemy, bool diagnostics, double frame_ms,
+                       const CombatCharacter& enemy, unsigned diagnostics, double frame_ms,
                        std::size_t arena_peak, std::size_t entities, std::uint32_t bodies) {
     HUE_PROFILE_ZONE("game::combat_hud");
     quad(q, n, {-0.98f, -0.98f}, {0.98f, -0.76f}, {0.02f, 0.025f, 0.04f, 0.88f});
     text(q, n, -0.94f, -0.80f, "WASD / LEFT STICK MOVE   SHIFT RUN   RMB / RIGHT STICK CAMERA");
     text(q, n, -0.94f, -0.85f, "LMB / X LIGHT   E / Y HEAVY   SPACE / B DODGE   TAB / R3 LOCK");
     text(q, n, -0.94f, -0.90f,
-         "ENTER / START BEGIN   R RESTART   F2 / BACK DIAGNOSTICS   ESC QUIT");
+         "ENTER / START BEGIN   R RESET   F2 / BACK DEBUG   F5 SCENE RELOAD   ESC QUIT");
     char buffer[160];
     std::snprintf(
         buffer, sizeof(buffer), "%s   TIME %.1F   LOCK %s", encounter_state_name(encounter.state()),
@@ -141,6 +145,25 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
     }
     if (!diagnostics)
         return;
+    if (diagnostics == 2) {
+        quad(q, n, {-0.98f, -0.05f}, {0.60f, 0.71f}, {0.02f, 0.025f, 0.04f, 0.94f});
+        text(q, n, -0.94f, 0.67f, "CPU TAG       LIVE KB    PEAK KB    ALLOCS    FRAME B", 0.9f);
+        const auto snapshot = hue::allocation_snapshot();
+        for (std::size_t i = 0; i < hue::kMemoryTagCount; ++i) {
+            const auto& tag = snapshot.tags[i];
+            std::snprintf(buffer, sizeof(buffer), "%-12s %8zu %10zu %9zu %10zu",
+                          hue::memory_tag_name(static_cast<hue::MemoryTag>(i)),
+                          tag.current_bytes / 1024, tag.peak_bytes / 1024, tag.live_allocations,
+                          tag.frame_requested_bytes);
+            text(q, n, -0.94f, 0.61f - static_cast<float>(i) * 0.05f, buffer, 0.9f);
+        }
+        std::snprintf(buffer, sizeof(buffer),
+                      "FRAME %.2F MS  ARENA PEAK %zu B  ENTITIES %zu  CONTROLLERS %u", frame_ms,
+                      arena_peak, entities, bodies);
+        text(q, n, -0.94f, 0.10f, buffer, 0.9f);
+        text(q, n, -0.94f, 0.04f, "CPU ALLOCATIONS ONLY - NOT VRAM. F2 RETURNS TO GAME.", 0.9f);
+        return;
+    }
     volumes(q, n, camera, player, encounter.model(0), player.hurtboxes(),
             {0.1f, 0.9f, 0.4f, 0.85f});
     volumes(q, n, camera, enemy, encounter.model(1), enemy.hurtboxes(), {0.1f, 0.7f, 1.0f, 0.85f});
@@ -151,15 +174,16 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
                 actor.hitbox_active() ? hue::Vec4{1.0f, 0.15f, 0.1f, 1.0f}
                                       : hue::Vec4{0.6f, 0.6f, 0.6f, 0.6f});
     }
-    quad(q, n, {-0.98f, 0.35f}, {0.80f, 0.71f}, {0.02f, 0.025f, 0.04f, 0.9f});
+    quad(q, n, {-0.98f, 0.12f}, {0.95f, 0.71f}, {0.02f, 0.025f, 0.04f, 0.9f});
     for (std::uint32_t i = 0; i < 2; ++i) {
         const auto& a = *actors[i];
         std::snprintf(buffer, sizeof(buffer),
-                      "%s %s HP %.0F POISE %.0F HIT %d CANCEL %d IFRAME %d BUFFER %u",
+                      "%s %s HP %.0F POISE %.0F HIT %d CANCEL %d IFRAME %d BUFFER %u %.2FS",
                       i == 0 ? "PLAYER" : "ENEMY", hue::combat::state_name(a.state()),
                       static_cast<double>(a.health()), static_cast<double>(a.poise()),
                       a.hitbox_active() ? 1 : 0, a.cancel_open() ? 1 : 0, a.invulnerable() ? 1 : 0,
-                      static_cast<unsigned>(a.buffered_action()));
+                      static_cast<unsigned>(a.buffered_action()),
+                      static_cast<double>(a.buffer_remaining()));
         text(q, n, -0.94f, 0.67f - static_cast<float>(i) * 0.05f, buffer);
     }
     std::snprintf(buffer, sizeof(buffer), "AI %s   HITS %u / %u   DODGES %u   HITSTOP %.3F",
@@ -176,4 +200,25 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
                   frame_ms, live / 1024, arena_peak, entities, bodies);
     text(q, n, -0.94f, 0.52f, buffer);
     text(q, n, -0.94f, 0.47f, "XRAY VOLUMES: RED ACTIVE HIT   GRAY INACTIVE   GREEN/BLUE HURT");
+    const auto& sense = encounter.perception();
+    const auto& brain = encounter.brain();
+    std::snprintf(buffer, sizeof(buffer), "AI LAST TICK DIST %.2F LOS %d LOST %.2FS STATE %.2FS",
+                  static_cast<double>(sense.distance), sense.line_of_sight ? 1 : 0,
+                  static_cast<double>(brain.los_lost_seconds()),
+                  static_cast<double>(brain.state_seconds()));
+    text(q, n, -0.94f, 0.42f, buffer);
+    std::snprintf(buffer, sizeof(buffer), "COOLDOWN LIGHT %.2FS HEAVY %.2FS  LAST ACTION %u",
+                  static_cast<double>(brain.light_cooldown()),
+                  static_cast<double>(brain.heavy_cooldown()),
+                  static_cast<unsigned>(brain.last_attack()));
+    text(q, n, -0.94f, 0.37f, buffer);
+    std::snprintf(buffer, sizeof(buffer), "HIT ACTIVATION %llu / %llu   SAMPLED WINDOW %d / %d",
+                  static_cast<unsigned long long>(player.activation()),
+                  static_cast<unsigned long long>(enemy.activation()),
+                  player.strike_window() ? 1 : 0, enemy.strike_window() ? 1 : 0);
+    text(q, n, -0.94f, 0.32f, buffer);
+    text(q, n, -0.94f, 0.27f, "BUFFER: 0 NONE  1 LIGHT  2 HEAVY  3 DODGE. EXPIRY IN SIM SECONDS.");
+    text(q, n, -0.94f, 0.22f,
+         encounter.scene_pending() ? "SCENE STAGED: R TO APPLY. F2 FOR MEMORY."
+                                   : "SCENE ACTIVE. F5 VALIDATES EDITS. F2 FOR MEMORY.");
 }
