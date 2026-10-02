@@ -17,6 +17,7 @@ add_executable(hue_tests
     game/test_encounter.cpp
     game/test_config.cpp
     game/test_tuning.cpp
+    game/test_fight_report.cpp
     ecs/test_ecs.cpp
     physics/test_physics.cpp
     core/bench_math.cpp
@@ -80,10 +81,17 @@ set_tests_properties(renderer_smoke PROPERTIES
     TIMEOUT 90
     SKIP_REGULAR_EXPRESSION "HUE_RENDERER_UNAVAILABLE")
 
+find_package(Python3 COMPONENTS Interpreter)
 add_test(NAME encounter_smoke
     COMMAND ${CMAKE_COMMAND} -DHUE_GAME=$<TARGET_FILE:hue_game>
+        -DHUE_PYTHON=${Python3_EXECUTABLE}
+        -DHUE_TELEMETRY_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/telemetry_smoke.py
         -P ${PROJECT_SOURCE_DIR}/cmake/RunEncounterSmoke.cmake)
 set_tests_properties(encounter_smoke PROPERTIES LABELS "game;smoke" TIMEOUT 180)
+
+if(Python3_FOUND)
+    add_test(NAME fight_report_tool COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_fight_report.py)
+endif()
 
 # End-to-end debug channel test: Python drives a live game over TCP.
 if(HUE_DEBUG_CHANNEL)

@@ -1,10 +1,13 @@
 // tests/game/test_encounter.cpp
 #include "combat_hud.h"
 #include "encounter.h"
+#include "fight_report.h"
 #include "hue/asset/gltf_loader.h"
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <doctest/doctest.h>
 #include <optional>
@@ -63,6 +66,34 @@ struct Fixture {
     }
 };
 } // namespace
+
+TEST_CASE("encounter: ten automated fights finish through real contact damage") {
+    Fixture f;
+    for (unsigned fight = 0; fight < 10; ++fight) {
+        f.reset();
+        f.session->start();
+        f.session->toggle_lock();
+        const auto started = std::chrono::steady_clock::now();
+        for (unsigned tick = 0; tick < 3600 && f.session->state() == EncounterState::kFighting;
+             ++tick) {
+            // Deliberately simple policy, not a simulated human or balance verdict.
+            if (fight % 2 == 0)
+                f.session->buffer(hue::combat::Action::kAttackHeavy);
+            f.tick();
+        }
+        REQUIRE(f.session->state() != EncounterState::kFighting);
+        CHECK(f.session->stats().hits[0] + f.session->stats().hits[1] > 0);
+        const auto wall =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        FightReport report{f.session->state(), f.session->stats(), wall,
+                           f.session->tuning().revision, FightSource::kAutomated};
+        char record[1024];
+        REQUIRE(format_fight_report(record, sizeof(record), report));
+        // Optional explicit test-output destination, never the source tree by default.
+        if (const auto* output = std::getenv("HUE_TEST_TELEMETRY"))
+            REQUIRE(append_fight_report(output, report));
+    }
+}
 
 TEST_CASE("encounter: ready gates input and terminal state rejects new actions") {
     Fixture f;

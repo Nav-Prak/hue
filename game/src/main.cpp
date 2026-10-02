@@ -16,6 +16,7 @@
 #include "combat_character.h"
 #include "combat_hud.h"
 #include "encounter.h"
+#include "fight_report.h"
 #include "fly_camera.h"
 #include "follow_camera.h"
 #include "runtime_files.h"
@@ -222,11 +223,13 @@ void render_status_command(void* user_data, const hue::DebugCommandLine& command
     response.append("{\"adapter\":");
     response.append_json_string(status.adapter);
     response.append_format(",\"swapchain\":[%u,%u],\"frames_rendered\":%llu,"
-                           "\"last_draws\":%u,\"last_culled\":%u,\"pipelines\":%u,\"layouts\":%u,\"modules\":%u,\"generation\":%llu}",
+                           "\"last_draws\":%u,\"last_culled\":%u,\"pipelines\":%u,\"layouts\":%u,"
+                           "\"modules\":%u,\"generation\":%llu}",
                            status.swapchain_width, status.swapchain_height,
                            static_cast<unsigned long long>(status.frames_rendered),
-                           status.last_draws, status.last_culled, status.live_pipelines, status.live_layouts,
-                           status.live_shader_modules, static_cast<unsigned long long>(status.shader_generation));
+                           status.last_draws, status.last_culled, status.live_pipelines,
+                           status.live_layouts, status.live_shader_modules,
+                           static_cast<unsigned long long>(status.shader_generation));
 }
 
 // Runtime recompile hook: recompile .spv externally (build, or glslang by
@@ -451,6 +454,7 @@ int main(int argc, char** argv) {
     long long max_frames = -1; // run until closed
     bool require_renderer = false;
     bool encounter_smoke = false;
+    const char* telemetry_path = nullptr;
     char scene_path[1024];
     char tuning_path[1024];
     if (!runtime_path(tuning_path, sizeof(tuning_path), "assets/config/tuning.json"))
@@ -462,6 +466,12 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             max_frames = std::atoll(argv[i + 1]);
+        } else if (std::strcmp(argv[i], "--telemetry") == 0) {
+            if (i + 1 >= argc || !*argv[i + 1]) {
+                HUE_LOG_ERROR("--telemetry requires a writable JSONL path");
+                return 1;
+            }
+            telemetry_path = argv[++i];
         } else if (std::strcmp(argv[i], "--encounter-smoke") == 0) {
             encounter_smoke = true;
             max_frames = 2400;
@@ -761,6 +771,13 @@ int main(int argc, char** argv) {
     if (!encounter.reset(animation_arena.value(), draws))
         return 1;
     unsigned diagnostics = 0;
+    FightRecorder fight_recorder;
+    const auto telemetry_source =
+        encounter_smoke ? FightSource::kInjected : FightSource::kInteractive;
+    const auto monotonic_seconds = [] {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    };
     const char* reload_status = "F5 SCENE / F6 TUNING. VALID EDITS APPLY ON RESTART.";
 #if defined(HUE_DEBUG_CHANNEL)
     debug_context.encounter = &encounter;
@@ -837,6 +854,8 @@ int main(int argc, char** argv) {
         if (encounter_smoke)
             resetting = frames % 120 == 0;
         if (resetting) {
+            // Abandoned fights are not completed-fight evidence.
+            fight_recorder = FightRecorder{};
             if (!world.flush() || !encounter.reset(animation_arena.value(), draws))
                 return 1;
             timestep.reset_accumulator();
@@ -877,6 +896,7 @@ int main(int argc, char** argv) {
         if (!resetting &&
             (input.key_pressed(hue::key::kTab) || input.pad_pressed(hue::pad::kRightThumb)))
             encounter.toggle_lock();
+        (void)fight_recorder.observe(encounter, monotonic_seconds(), telemetry_source);
         for (int step = 0; step < steps; ++step) {
             if (step == 0)
                 log_input_edges(input);
@@ -886,6 +906,14 @@ int main(int argc, char** argv) {
             if (!advanced) {
                 HUE_LOG_ERROR("encounter tick failed");
                 return 1;
+            }
+        }
+        if (auto report =
+                fight_recorder.observe(encounter, monotonic_seconds(), telemetry_source)) {
+            if (telemetry_path && !append_fight_report(telemetry_path, *report)) {
+                HUE_LOG_WARN(
+                    "telemetry write failed; disabled for this session (gameplay continues)");
+                telemetry_path = nullptr;
             }
         }
         if (!world.flush())

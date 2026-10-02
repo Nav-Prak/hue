@@ -191,6 +191,60 @@ TEST_CASE("ai: lost LOS past memory deaggros") {
     CHECK(brain.state() == AiState::kIdle);
 }
 
+TEST_CASE("ai: two attacks remain available across prolonged repeated combat") {
+    Brain brain({}, 2026);
+    auto sense = melee_sight();
+    unsigned light = 0, heavy = 0;
+    int swing_ticks = 0;
+    for (int tick = 0; tick < 7200; ++tick) {
+        if (swing_ticks > 0)
+            --swing_ticks;
+        else
+            sense.self_state = State::kLocomotion;
+        const auto command = brain.update(kTick, sense);
+        if (command.action == Action::kAttackLight) {
+            ++light;
+            swing_ticks = 64;
+            sense.self_state = State::kAttackLight;
+        } else if (command.action == Action::kAttackHeavy) {
+            ++heavy;
+            swing_ticks = 98;
+            sense.self_state = State::kAttackHeavy;
+        }
+    }
+    CHECK(light > 10);
+    CHECK(heavy > 10);
+}
+
+TEST_CASE("ai: heavy whiff has a tunable recovery opportunity after animation ends") {
+    unsigned recover_ticks[2]{};
+    for (unsigned trial = 0; trial < 2; ++trial) {
+        hue::combat::AiTuning tuning;
+        tuning.light_weight = 0; // deterministic heavy opener
+        tuning.recover_seconds = trial == 0 ? 0.65f : 0.85f;
+        Brain brain(tuning, 2026);
+        auto sense = melee_sight();
+        hue::combat::AiCommand command;
+        for (int tick = 0; tick < 120 && command.action == Action::kNone; ++tick)
+            command = brain.update(kTick, sense);
+        REQUIRE(command.action == Action::kAttackHeavy);
+        sense.self_state = State::kAttackHeavy;
+        sense.distance = 3; // target evades; no contact injected into brain
+        for (int tick = 0; tick < 98; ++tick)
+            CHECK(brain.update(kTick, sense).action == Action::kNone);
+        sense.self_state = State::kLocomotion;
+        (void)brain.update(kTick, sense);
+        REQUIRE(brain.state() == AiState::kRecover);
+        for (unsigned tick = 0; tick < 120 && brain.state() == AiState::kRecover; ++tick) {
+            CHECK(brain.update(kTick, sense).action == Action::kNone);
+            ++recover_ticks[trial];
+        }
+    }
+    CHECK(recover_ticks[0] >= 39);
+    CHECK(recover_ticks[1] >= recover_ticks[0] + 11);
+    CHECK(recover_ticks[1] <= recover_ticks[0] + 13);
+}
+
 TEST_CASE("ai: ignores non-finite dt") {
     Brain brain;
     Perception sense = melee_sight();
