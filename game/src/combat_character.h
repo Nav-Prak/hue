@@ -16,6 +16,7 @@
 #include "hue/core/result.h"
 #include "hue/physics/physics.h"
 #include "hue/render/renderer.h"
+#include "tuning.h"
 
 #include <cstdint>
 #include <utility>
@@ -31,7 +32,9 @@ public:
     CombatCharacter& operator=(const CombatCharacter&) = delete;
 
     [[nodiscard]] hue::Result<void> initialize();
-    [[nodiscard]] hue::Result<void> reset(hue::LinearArena& arena, hue::MeshDraw* draws);
+    [[nodiscard]] hue::Result<void> reset(hue::LinearArena& arena, hue::MeshDraw* draws,
+                                          const GameTuning& tuning = {});
+    [[nodiscard]] bool can_apply_tuning(const GameTuning& tuning) const noexcept;
     // Terminal presentation advances clips without consuming buffered actions.
     [[nodiscard]] hue::Result<void> present(float dt, hue::LinearArena& arena,
                                             hue::MeshDraw* draws);
@@ -94,6 +97,8 @@ private:
 
     hue::asset::SkinnedMeshData m_data;
     hue::anim::AnimationEventTrack m_events;
+    float m_original_event_times[hue::anim::kMaxAnimationEvents]{};
+    GameTuning m_tuning{};
     hue::anim::Animator m_animator;
     hue::combat::StateMachine m_machine;
     hue::MeshHandle m_mesh;

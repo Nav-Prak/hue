@@ -35,8 +35,8 @@ set(VULKAN_HEADERS_INSTALL_DIR "${vulkan-headers_SOURCE_DIR}" CACHE PATH "" FORC
 FetchContent_MakeAvailable(volk vma)
 
 # ------------------------------------------------------------------ shader toolchain
-# Host build tools only: they never link into engine binaries, so they keep
-# their own defaults (exceptions restored on MSVC; Hue strips /EHsc globally).
+# The owner approved using the pinned validator at runtime on October 2, 2026.
+# Third-party targets keep their own exception settings; Hue APIs return Result.
 
 set(SPIRV_SKIP_TESTS ON CACHE BOOL "" FORCE)
 set(SPIRV_WERROR OFF CACHE BOOL "" FORCE)
@@ -94,6 +94,7 @@ add_library(hue_render STATIC
     src/pipeline.cpp
     src/renderer.cpp
     src/spirv.cpp
+    src/spirv_contract.cpp
     src/swapchain.cpp
     src/texture.cpp
     src/vma_impl.cpp
@@ -103,8 +104,28 @@ add_library(hue::render ALIAS hue_render)
 target_include_directories(hue_render PUBLIC include)
 target_link_libraries(hue_render
     PUBLIC hue::core hue::asset hue::engine_flags
-    PRIVATE volk_headers GPUOpen::VulkanMemoryAllocator glfw
+    PRIVATE volk_headers GPUOpen::VulkanMemoryAllocator glfw SPIRV-Tools-static
 )
+target_include_directories(hue_render PRIVATE ${spirv-headers_SOURCE_DIR}/include)
+if(HUE_SANITIZE)
+    if(MSVC)
+        target_compile_options(SPIRV-Tools-static PUBLIC /fsanitize=address /Zi)
+        target_link_options(SPIRV-Tools-static INTERFACE /INCREMENTAL:NO)
+    else()
+        target_compile_options(SPIRV-Tools-static PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+        target_link_options(SPIRV-Tools-static INTERFACE -fsanitize=address,undefined)
+    endif()
+endif()
+if(HUE_FUZZ)
+    target_compile_options(SPIRV-Tools-static PRIVATE -fsanitize=fuzzer-no-link)
+endif()
+if(MSVC AND HUE_SANITIZE AND HUE_ASAN_RUNTIME_DLLS)
+    add_custom_target(hue_shader_tool_runtime
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${HUE_ASAN_RUNTIME_DLLS} $<TARGET_FILE_DIR:spirv-val>
+        DEPENDS spirv-val VERBATIM)
+else()
+    add_custom_target(hue_shader_tool_runtime DEPENDS spirv-val)
+endif()
 
 # volk as header-only (VOLK_IMPLEMENTATION in vma_impl.cpp) so the loader
 # glue compiles with engine flags instead of volk's defaults.

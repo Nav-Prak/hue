@@ -690,14 +690,21 @@ Result<void> Renderer::reload_shaders() {
         return created.error();
     }
 
-    vkDeviceWaitIdle(state.context.device);
+    if (vkDeviceWaitIdle(state.context.device) != VK_SUCCESS) {
+        pipeline_destroy(fresh, state.context);
+        return ErrorCode::kUnknown;
+    }
     pipeline_destroy(state.pipeline, state.context);
     state.pipeline = fresh;
+    ++state.status.shader_generation;
     HUE_LOG_INFO("shader reload complete");
     return {};
 }
 
 const RendererStatus& Renderer::status() const noexcept {
+    m_state->status.live_pipelines = m_state->context.live_pipelines;
+    m_state->status.live_layouts = m_state->context.live_layouts;
+    m_state->status.live_shader_modules = m_state->context.live_shader_modules;
     return m_state->status;
 }
 

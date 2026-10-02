@@ -147,6 +147,10 @@ struct GameDebugContext {
     double uptime_seconds = 0.0;
     bool quit_requested = false;
     hue::Renderer* renderer = nullptr; // null when running without a GPU
+    Encounter* encounter = nullptr;
+    const char* scene_path = nullptr;
+    const char* tuning_path = nullptr;
+    bool reset_requested = false, start_requested = false;
 };
 
 void status_command(void* user_data, const hue::DebugCommandLine& command,
@@ -165,6 +169,47 @@ void quit_command(void* user_data, const hue::DebugCommandLine& command,
     response.append("{\"quitting\":true}");
 }
 
+void fight_command(void* user_data, const hue::DebugCommandLine& command,
+                   hue::DebugResponse& response) {
+    auto& c = *static_cast<GameDebugContext*>(user_data);
+    if (!c.encounter) {
+        response.set_error("encounter unavailable");
+        return;
+    }
+    if (!std::strcmp(command.name, "fight.reset"))
+        c.reset_requested = true;
+    if (!std::strcmp(command.name, "fight.start"))
+        c.start_requested = true;
+    const auto& e = *c.encounter;
+    response.append_format(
+        "{\"state\":\"%s\",\"revision\":%u,\"scene_pending\":%s,\"tuning_pending\":%s,\"player_x\":"
+        "%.3f}",
+        encounter_state_name(e.state()), e.tuning().revision, e.scene_pending() ? "true" : "false",
+        e.tuning_pending() ? "true" : "false", static_cast<double>(e.position(0).x));
+}
+
+void config_reload_command(void* user_data, const hue::DebugCommandLine& command,
+                           hue::DebugResponse& response) {
+    auto& c = *static_cast<GameDebugContext*>(user_data);
+    const bool scene = !std::strcmp(command.name, "scene.reload");
+    auto bytes = read_config_file(scene ? c.scene_path : c.tuning_path);
+    bool accepted = false;
+    if (bytes && c.encounter) {
+        if (scene) {
+            auto parsed = parse_scene(bytes.value().data, bytes.value().size);
+            accepted = parsed && c.encounter->stage_scene(parsed.value());
+        } else {
+            auto parsed = parse_tuning(bytes.value().data, bytes.value().size);
+            accepted = parsed && c.encounter->stage_tuning(parsed.value());
+        }
+    }
+    if (accepted)
+        response.append("{\"staged\":true,\"applies\":\"next restart\"}");
+    else
+        response.set_error(
+            "invalid or unavailable candidate; active and pending configuration retained");
+}
+
 void render_status_command(void* user_data, const hue::DebugCommandLine& command,
                            hue::DebugResponse& response) {
     (void)command;
@@ -177,10 +222,11 @@ void render_status_command(void* user_data, const hue::DebugCommandLine& command
     response.append("{\"adapter\":");
     response.append_json_string(status.adapter);
     response.append_format(",\"swapchain\":[%u,%u],\"frames_rendered\":%llu,"
-                           "\"last_draws\":%u,\"last_culled\":%u}",
+                           "\"last_draws\":%u,\"last_culled\":%u,\"pipelines\":%u,\"layouts\":%u,\"modules\":%u,\"generation\":%llu}",
                            status.swapchain_width, status.swapchain_height,
                            static_cast<unsigned long long>(status.frames_rendered),
-                           status.last_draws, status.last_culled);
+                           status.last_draws, status.last_culled, status.live_pipelines, status.live_layouts,
+                           status.live_shader_modules, static_cast<unsigned long long>(status.shader_generation));
 }
 
 // Runtime recompile hook: recompile .spv externally (build, or glslang by
@@ -251,9 +297,6 @@ void run_job_benchmark(hue::JobSystem& jobs) {
 
 // Movement tuning shared by the controller and the animation blend, so the
 // blend parameter is literally the character's ground speed.
-constexpr float kWalkSpeed = 1.6f; // m/s, matches the walk gait
-constexpr float kRunSpeed = 4.0f;  // m/s, matches the locomotion (run) gait
-
 // KayKit bind pose faces +Z (Unity). Hue locomotion treats yaw 0 as -Z,
 // matching the generated fixtures and the camera-relative WASD basis.
 // Adding π here turns the mesh to match movement without rebaking clips.
@@ -324,7 +367,8 @@ struct BodyComponent {
 // WASD (or left stick) relative to the camera yaw. Keyboard: shift runs.
 // Gamepad: stick deflection is analog - direction from the angle, walk-to-
 // run speed from the magnitude.
-[[nodiscard]] hue::Vec3 movement_input(const hue::Input& input, float camera_yaw) {
+[[nodiscard]] hue::Vec3 movement_input(const hue::Input& input, float camera_yaw,
+                                       const GameTuning& tuning) {
     using namespace hue;
     constexpr float kStickDeadzone = 0.2f;
 
@@ -338,7 +382,7 @@ struct BodyComponent {
         right_axis += 1.0f;
     if (input.key_down(key::kA))
         right_axis -= 1.0f;
-    float speed = input.key_down(key::kLeftShift) ? kRunSpeed : kWalkSpeed;
+    float speed = input.key_down(key::kLeftShift) ? tuning.run_speed : tuning.walk_speed;
 
     const GamepadState& pad = input.gamepad();
     if (pad.connected) {
@@ -352,7 +396,7 @@ struct BodyComponent {
             // full deflection runs.
             const float deflection =
                 clamp((magnitude - kStickDeadzone) / (1.0f - kStickDeadzone), 0.0f, 1.0f);
-            speed = lerp(kWalkSpeed, kRunSpeed, deflection);
+            speed = lerp(tuning.walk_speed, tuning.run_speed, deflection);
         }
     }
     if (forward_axis == 0.0f && right_axis == 0.0f)
@@ -408,6 +452,9 @@ int main(int argc, char** argv) {
     bool require_renderer = false;
     bool encounter_smoke = false;
     char scene_path[1024];
+    char tuning_path[1024];
+    if (!runtime_path(tuning_path, sizeof(tuning_path), "assets/config/tuning.json"))
+        return 1;
     if (!runtime_path(scene_path, sizeof(scene_path), "assets/config/arena.json"))
         return 1;
     bool debug_channel_requested = false;
@@ -442,6 +489,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    auto tuning_bytes = read_config_file(tuning_path);
+    if (!tuning_bytes) {
+        HUE_LOG_ERROR("tuning file unavailable");
+        return 1;
+    }
+    auto initial_tuning = parse_tuning(tuning_bytes.value().data, tuning_bytes.value().size);
+    if (!initial_tuning) {
+        HUE_LOG_ERROR("invalid tuning schema or relationships");
+        return 1;
+    }
     auto platform = hue::Platform::create();
     if (!platform) {
         HUE_LOG_ERROR("platform init failed");
@@ -663,6 +720,18 @@ int main(int argc, char** argv) {
                 "shader.reload", "reload .spv shaders and rebuild the pipeline",
                 &shader_reload_command, &debug_context);
         }
+        for (const char* name : {"fight.status", "fight.start", "fight.reset"}) {
+            if (registered)
+                registered = debug_channel.value().register_command(
+                    name, "inspect or queue encounter lifecycle action", &fight_command,
+                    &debug_context);
+        }
+        for (const char* name : {"scene.reload", "tuning.reload"}) {
+            if (registered)
+                registered = debug_channel.value().register_command(
+                    name, "validate config; apply on next restart", &config_reload_command,
+                    &debug_context);
+        }
         if (!registered) {
             HUE_LOG_ERROR("debug channel command registration failed");
             return 1;
@@ -685,9 +754,19 @@ int main(int argc, char** argv) {
                         player_body.value(), enemy_body.value(), follow_camera);
     if (!encounter.stage_scene(initial_scene.value()))
         return 1;
+    if (!encounter.stage_tuning(initial_tuning.value())) {
+        HUE_LOG_ERROR("tuning conflicts with clip events");
+        return 1;
+    }
     if (!encounter.reset(animation_arena.value(), draws))
         return 1;
     unsigned diagnostics = 0;
+    const char* reload_status = "F5 SCENE / F6 TUNING. VALID EDITS APPLY ON RESTART.";
+#if defined(HUE_DEBUG_CHANNEL)
+    debug_context.encounter = &encounter;
+    debug_context.scene_path = scene_path;
+    debug_context.tuning_path = tuning_path;
+#endif
     double frame_samples[4096]{};
     std::size_t frame_sample_count = 0;
     std::size_t frame_sample_cursor = 0;
@@ -723,28 +802,45 @@ int main(int argc, char** argv) {
         if (input.key_pressed(hue::key::kF2) || input.pad_pressed(hue::pad::kBack))
             diagnostics = (diagnostics + 1) % 3;
         if (input.key_pressed(hue::key::kF5)) {
+            reload_status = "SCENE REJECTED - LAST WORKING DATA KEPT";
             auto bytes = read_config_file(scene_path);
             if (bytes) {
                 auto candidate = parse_scene(bytes.value().data, bytes.value().size);
-                if (candidate && encounter.stage_scene(candidate.value()))
+                if (candidate && encounter.stage_scene(candidate.value())) {
+                    reload_status = "SCENE STAGED - R TO APPLY";
                     HUE_LOG_INFO("scene accepted; applies on next restart");
-                else
+                } else
                     HUE_LOG_WARN("scene rejected; current and pending scene unchanged");
             } else
                 HUE_LOG_WARN("scene read failed; current and pending scene unchanged");
         }
 
-        const bool begin =
-            input.key_pressed(hue::key::kEnter) || input.pad_pressed(hue::pad::kStart);
+        if (input.key_pressed(hue::key::kF6)) {
+            reload_status = "TUNING REJECTED - LAST WORKING DATA KEPT";
+            auto bytes = read_config_file(tuning_path);
+            if (bytes) {
+                auto candidate = parse_tuning(bytes.value().data, bytes.value().size);
+                if (candidate && encounter.stage_tuning(candidate.value()))
+                    reload_status = "TUNING STAGED - R TO APPLY";
+            }
+            HUE_LOG_INFO("%s", reload_status);
+        }
+        bool begin = input.key_pressed(hue::key::kEnter) || input.pad_pressed(hue::pad::kStart);
         bool resetting = input.key_pressed(hue::key::kR) ||
                          (begin && encounter.state() != EncounterState::kReady &&
                           encounter.state() != EncounterState::kFighting);
+#if defined(HUE_DEBUG_CHANNEL)
+        begin = begin || debug_context.start_requested;
+        resetting = resetting || debug_context.reset_requested;
+        debug_context.start_requested = debug_context.reset_requested = false;
+#endif
         if (encounter_smoke)
             resetting = frames % 120 == 0;
         if (resetting) {
             if (!world.flush() || !encounter.reset(animation_arena.value(), draws))
                 return 1;
             timestep.reset_accumulator();
+            reload_status = "ACTIVE CONFIGURATION APPLIED";
         } else if (begin) {
             encounter.start();
         }
@@ -784,8 +880,9 @@ int main(int argc, char** argv) {
         for (int step = 0; step < steps; ++step) {
             if (step == 0)
                 log_input_edges(input);
-            auto advanced = encounter.tick(movement_input(input, follow_camera.yaw()),
-                                           animation_arena.value(), draws);
+            auto advanced =
+                encounter.tick(movement_input(input, follow_camera.yaw(), encounter.tuning()),
+                               animation_arena.value(), draws);
             if (!advanced) {
                 HUE_LOG_ERROR("encounter tick failed");
                 return 1;
@@ -885,7 +982,7 @@ int main(int argc, char** argv) {
             append_combat_hud(hud, hud_count, camera, encounter, *combat_characters[0],
                               *combat_characters[1], diagnostics, frame_seconds * 1000.0,
                               animation_arena.value().high_water_mark(), world.alive_count(),
-                              physics.value().character_count());
+                              physics.value().character_count(), reload_status);
             const auto drawn =
                 renderer.value().draw_frame(camera, draws, draw_count, hud, hud_count);
             if (!drawn) {

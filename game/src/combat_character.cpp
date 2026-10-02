@@ -10,14 +10,6 @@
 
 namespace {
 
-// Movement tuning shared with main.cpp: the blend parameter is literally
-// the capsule controller's solved ground speed.
-constexpr float kWalkSpeed = 1.6f;
-constexpr float kRunSpeed = 4.0f;
-constexpr float kIdleThreshold = 0.2f;
-constexpr float kPoiseRegenDelay = 1.0f;
-constexpr float kPoiseRegenPerSecond = 18.0f;
-
 [[nodiscard]] hue::Mat4 volume_world(const hue::Mat4& model, const hue::Mat4* globals,
                                      std::uint32_t joint_count,
                                      const hue::combat::BoundVolume& volume) noexcept {
@@ -56,6 +48,10 @@ constexpr float kPoiseRegenPerSecond = 18.0f;
 } // namespace
 
 hue::Result<void> CombatCharacter::initialize() {
+    if (m_events.events.size() > hue::anim::kMaxAnimationEvents)
+        return hue::ErrorCode::kCorruptData;
+    for (std::size_t i = 0; i < m_events.events.size(); ++i)
+        m_original_event_times[i] = m_events.events[i].time;
     const auto valid = hue::anim::validate_animation_events(m_data, m_events);
     if (!valid) {
         return valid.error();
@@ -122,7 +118,7 @@ CombatCharacter::apply_strike(const hue::combat::Strike& strike) noexcept {
         m_health = 0.0f;
     }
     m_poise -= strike.poise;
-    m_poise_regen_delay = kPoiseRegenDelay;
+    m_poise_regen_delay = m_tuning.regen_delay;
     contact.landed = true;
     contact.fatal = m_health <= 0.0f;
     contact.staggered = contact.fatal || m_poise <= 0.0f;
@@ -168,7 +164,7 @@ hue::Result<void> CombatCharacter::update(float delta_seconds, hue::LinearArena&
     if (m_poise_regen_delay > 0.0f) {
         m_poise_regen_delay -= delta_seconds;
     } else if (m_poise < m_max_poise && m_health > 0.0f) {
-        m_poise += kPoiseRegenPerSecond * delta_seconds;
+        m_poise += m_tuning.regen_rate * delta_seconds;
         if (m_poise > m_max_poise) {
             m_poise = m_max_poise;
         }
@@ -193,14 +189,14 @@ hue::Result<void> CombatCharacter::update(float delta_seconds, hue::LinearArena&
     if (state == State::kLocomotion) {
         // Week 8 locomotion layer: idle below the threshold, walk/run 1D
         // blend driven by the controller's actual ground speed above it.
-        if (m_speed < kIdleThreshold) {
+        if (m_speed < m_tuning.idle_threshold) {
             const auto played = m_animator.play(m_idle_clip, 0.2f, true);
             if (!played) {
                 return played.error();
             }
         } else {
-            const auto played =
-                m_animator.play_blend(m_walk_clip, m_run_clip, kWalkSpeed, kRunSpeed, 0.15f);
+            const auto played = m_animator.play_blend(m_walk_clip, m_run_clip, m_tuning.walk_speed,
+                                                      m_tuning.run_speed, 0.15f);
             if (!played) {
                 return played.error();
             }
@@ -243,9 +239,47 @@ void CombatCharacter::retain_pose(const hue::anim::AnimationFrame& frame,
     draws[m_draw_index].joint_count = m_joint_count;
 }
 
-hue::Result<void> CombatCharacter::reset(hue::LinearArena& arena, hue::MeshDraw* draws) {
-    m_machine = hue::combat::StateMachine{};
+bool CombatCharacter::can_apply_tuning(const GameTuning& tuning) const noexcept {
+    if (!valid_tuning(tuning))
+        return false;
+    for (std::size_t c = 0; c < m_data.clips.size(); ++c) {
+        const auto& clip = m_data.clips[c];
+        float last = -1;
+        for (std::size_t i = 0; i < m_events.events.size(); ++i) {
+            const auto& event = m_events.events[i];
+            if (std::strcmp(event.clip, clip.name))
+                continue;
+            float time = m_original_event_times[i];
+            if (!std::strcmp(event.name, "cancel_close"))
+                time *= tuning.cancel_close_scale;
+            if (!std::strcmp(event.name, "cancel_open"))
+                time *= tuning.cancel_open_scale;
+            if (time < last || time > clip.duration)
+                return false;
+            last = time;
+        }
+    }
+    return true;
+}
+
+hue::Result<void> CombatCharacter::reset(hue::LinearArena& arena, hue::MeshDraw* draws,
+                                         const GameTuning& tuning) {
+    if (!can_apply_tuning(tuning))
+        return hue::ErrorCode::kInvalidArgument;
+    m_tuning = tuning;
+    m_max_health = tuning.health;
+    m_max_poise = tuning.poise;
+    m_machine = hue::combat::StateMachine{hue::combat::Tuning{tuning.input_buffer}};
     m_animator = hue::anim::Animator{};
+    // Animator was detached before changing event storage; no active event pointers survive.
+    for (std::size_t i = 0; i < m_events.events.size(); ++i) {
+        auto& event = m_events.events[i];
+        event.time = m_original_event_times[i];
+        if (!std::strcmp(event.name, "cancel_close"))
+            event.time *= tuning.cancel_close_scale;
+        if (!std::strcmp(event.name, "cancel_open"))
+            event.time *= tuning.cancel_open_scale;
+    }
     m_health = m_max_health;
     m_poise = m_max_poise;
     m_poise_regen_delay = m_speed = 0.0f;

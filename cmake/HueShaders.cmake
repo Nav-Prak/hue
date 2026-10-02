@@ -32,6 +32,7 @@ function(hue_target_shaders target)
     endforeach()
 
     add_custom_target(${target}_shaders DEPENDS ${spv_outputs})
+    add_dependencies(${target}_shaders hue_shader_tool_runtime)
     add_dependencies(${target} ${target}_shaders)
 
     # Stage compiled shaders next to the executable after every build.

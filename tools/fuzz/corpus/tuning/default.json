@@ -1,0 +1,1 @@
+{"version":1,"revision":1,"movement":[1.6,4,0.2],"dodge":[6,0.45],"vitals":[100,40,1,18],"input_buffer":0.35,"light_strike":[14,22,0.055,0.1],"heavy_strike":[28,45,0.09,0.18],"ai_ranges":[12,18,1.75],"ai_speeds":[1.6,3.2,1.5],"ai_times":[0.25,0.65,1.5],"ai_attacks":[0.65,1.8,2.4],"cancel_scale":[1,1],"lock_ranges":[15,20]}

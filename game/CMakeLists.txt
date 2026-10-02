@@ -3,6 +3,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/HueShaders.cmake)
 
 add_library(hue_gameplay STATIC
     src/config_json.cpp
+    src/tuning.cpp
     src/scene_config.cpp
     src/runtime_files.cpp
     src/encounter.cpp

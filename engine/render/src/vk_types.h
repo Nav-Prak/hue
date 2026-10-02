@@ -51,6 +51,7 @@ struct ContextState {
     std::uint32_t queue_family = 0;
     VmaAllocator allocator = VK_NULL_HANDLE;
     char adapter_name[256] = {};
+    mutable std::uint32_t live_pipelines = 0, live_layouts = 0, live_shader_modules = 0;
 };
 
 struct SwapchainState {

@@ -34,6 +34,9 @@ public:
     void toggle_lock() noexcept;
     // Candidate changes are validated immediately and only applied at reset.
     [[nodiscard]] bool stage_scene(const SceneConfig& scene) noexcept;
+    [[nodiscard]] bool stage_tuning(const GameTuning& tuning) noexcept;
+    [[nodiscard]] const GameTuning& tuning() const noexcept { return m_tuning; }
+    [[nodiscard]] bool tuning_pending() const noexcept { return m_tuning_pending; }
     [[nodiscard]] const SceneConfig& scene() const noexcept { return m_scene; }
     [[nodiscard]] bool scene_pending() const noexcept { return m_scene_pending; }
     [[nodiscard]] const hue::combat::Perception& perception() const noexcept {
@@ -60,6 +63,8 @@ private:
     EncounterState m_state = EncounterState::kReady;
     FightStats m_stats{};
     SceneConfig m_scene{}, m_next_scene{};
+    GameTuning m_tuning{}, m_next_tuning{};
+    bool m_tuning_pending = false;
     bool m_scene_pending = false;
     hue::combat::Perception m_perception{};
     float m_yaw[2] = {kEncounterYaw[0], kEncounterYaw[1]};

@@ -21,4 +21,10 @@ inline constexpr std::size_t kSpirvMaxBytes = 8 * 1024 * 1024; // no engine shad
 // SPIR-V magic number in the declared endianness.
 [[nodiscard]] Result<void> validate_spirv_bytes(const void* bytes, std::size_t size) noexcept;
 
+// Full Vulkan 1.3 semantic validation followed by the engine's exact shader ABI.
+// Names are the seven shipped *.spv basenames, never arbitrary interface policy.
+// Deliberately rejects new resources/stages/layouts until the engine changes too.
+[[nodiscard]] Result<void> validate_shader_contract(const void* bytes, std::size_t size,
+                                                    const char* shader_name) noexcept;
+
 } // namespace hue

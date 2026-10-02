@@ -55,8 +55,12 @@ hue::Result<void> Encounter::reset(hue::LinearArena& arena, hue::MeshDraw* draws
         m_scene_pending = false;
     }
     m_perception = {};
+    if (m_tuning_pending) {
+        m_tuning = m_next_tuning;
+        m_tuning_pending = false;
+    }
     m_stats = {};
-    m_brain = hue::combat::Brain{{}, 2026u};
+    m_brain = hue::combat::Brain{m_tuning.ai, 2026u};
     m_pending = hue::combat::Action::kNone;
     m_toggle_pending = m_locked = false;
     m_hitstop = 0.0f;
@@ -70,7 +74,7 @@ hue::Result<void> Encounter::reset(hue::LinearArena& arena, hue::MeshDraw* draws
         if (!body)
             return body.error();
         arena.reset();
-        auto actor = m_actors[i]->reset(arena, draws);
+        auto actor = m_actors[i]->reset(arena, draws, m_tuning);
         if (!actor)
             return actor.error();
     }
@@ -88,6 +92,14 @@ bool Encounter::stage_scene(const SceneConfig& scene) noexcept {
 void Encounter::start() noexcept {
     if (m_state == EncounterState::kReady)
         m_state = EncounterState::kFighting;
+}
+
+bool Encounter::stage_tuning(const GameTuning& tuning) noexcept {
+    if (!m_actors[0]->can_apply_tuning(tuning) || !m_actors[1]->can_apply_tuning(tuning))
+        return false;
+    m_next_tuning = tuning;
+    m_tuning_pending = true;
+    return true;
 }
 void Encounter::buffer(hue::combat::Action action) noexcept {
     if (m_state == EncounterState::kFighting && action != hue::combat::Action::kNone)
@@ -121,10 +133,11 @@ hue::Result<void> Encounter::tick(hue::Vec3 movement, hue::LinearArena& arena,
     }
     ++m_stats.ticks;
     if (m_toggle_pending) {
-        m_locked = !m_locked && m_actors[1]->alive() && length(position(1) - position(0)) <= 15.0f;
+        m_locked = !m_locked && m_actors[1]->alive() &&
+                   length(position(1) - position(0)) <= m_tuning.lock_acquire;
         m_toggle_pending = false;
     }
-    if (!m_actors[1]->alive() || length(position(1) - position(0)) > 20.0f)
+    if (!m_actors[1]->alive() || length(position(1) - position(0)) > m_tuning.lock_release)
         m_locked = false;
     if (m_hitstop > 0.0f) {
         m_hitstop = std::max(0.0f, m_hitstop - kTick);
@@ -150,8 +163,9 @@ hue::Result<void> Encounter::tick(hue::Vec3 movement, hue::LinearArena& arena,
     movement.y = 0.0f;
     hue::Vec3 desired = movement;
     if (m_actors[0]->state() == State::kDodge) {
-        const float decay = hue::clamp(1.0f - m_actors[0]->state_seconds() / 0.45f, 0.0f, 1.0f);
-        desired = m_dodge_direction * (6.0f * decay);
+        const float decay =
+            hue::clamp(1.0f - m_actors[0]->state_seconds() / m_tuning.dodge_seconds, 0.0f, 1.0f);
+        desired = m_dodge_direction * (m_tuning.dodge_speed * decay);
     } else if (m_actors[0]->state() != State::kLocomotion) {
         desired = {};
     }
@@ -197,8 +211,8 @@ hue::Result<void> Encounter::tick(hue::Vec3 movement, hue::LinearArena& arena,
     for (std::uint32_t i = 0; i < 2; ++i) {
         if (!contacts[i])
             continue;
-        const auto strike = m_actors[i]->state() == State::kAttackHeavy ? hue::combat::kStrikeHeavy
-                                                                        : hue::combat::kStrikeLight;
+        const auto strike =
+            m_actors[i]->state() == State::kAttackHeavy ? m_tuning.heavy : m_tuning.light;
         const auto contact = m_actors[1u - i]->apply_strike(strike);
         if (!contact.landed)
             continue;

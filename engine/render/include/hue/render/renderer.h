@@ -35,6 +35,8 @@ struct RendererStatus {
     std::uint64_t frames_rendered = 0;
     std::uint32_t last_draws = 0;  // draw items rendered last frame
     std::uint32_t last_culled = 0; // draw items rejected by the frustum
+    std::uint32_t live_pipelines = 0, live_layouts = 0, live_shader_modules = 0;
+    std::uint64_t shader_generation = 0;
 };
 
 // One instance of an uploaded mesh in the frame's draw list.

@@ -16,6 +16,7 @@ add_executable(hue_tests
     combat/test_ai.cpp
     game/test_encounter.cpp
     game/test_config.cpp
+    game/test_tuning.cpp
     ecs/test_ecs.cpp
     physics/test_physics.cpp
     core/bench_math.cpp
@@ -42,6 +43,8 @@ target_compile_definitions(hue_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WI
 target_compile_definitions(hue_tests PRIVATE
     HUE_TEST_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tools/fuzz/corpus/gltf"
     HUE_TEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/assets/models")
+target_compile_definitions(hue_tests PRIVATE HUE_TEST_SHADERS_DIR="${PROJECT_BINARY_DIR}/game/shaders")
+add_dependencies(hue_tests hue_game_shaders)
 target_link_libraries(hue_tests PRIVATE hue_gameplay hue_core hue::asset hue::anim hue::combat hue::ecs hue::physics hue::render doctest::doctest hue::options)
 if(MSVC)
     # VS 2026 warns on doctest 2.4.12's intentional std::tuple specialization.
@@ -95,6 +98,12 @@ if(HUE_DEBUG_CHANNEL)
                 -P ${PROJECT_SOURCE_DIR}/cmake/RunDebugChannelSmoke.cmake
         )
         set_tests_properties(debug_channel_smoke PROPERTIES LABELS "platform;smoke" TIMEOUT 150)
+        add_test(NAME reload_smoke
+            COMMAND ${CMAKE_COMMAND} -DHUE_GAME=$<TARGET_FILE:hue_game>
+                -DHUE_PYTHON=${Python3_EXECUTABLE}
+                -DHUE_SMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/reload_smoke.py
+                -P ${PROJECT_SOURCE_DIR}/cmake/RunDebugChannelSmoke.cmake)
+        set_tests_properties(reload_smoke PROPERTIES LABELS "game;render;smoke" TIMEOUT 150)
     else()
         message(STATUS "Python3 not found: skipping debug_channel_smoke test")
     endif()

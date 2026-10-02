@@ -124,7 +124,8 @@ void volumes(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& camera,
 void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& camera,
                        const Encounter& encounter, const CombatCharacter& player,
                        const CombatCharacter& enemy, unsigned diagnostics, double frame_ms,
-                       std::size_t arena_peak, std::size_t entities, std::uint32_t bodies) {
+                       std::size_t arena_peak, std::size_t entities, std::uint32_t bodies,
+                       const char* reload_status) {
     HUE_PROFILE_ZONE("game::combat_hud");
     quad(q, n, {-0.98f, -0.98f}, {0.98f, -0.76f}, {0.02f, 0.025f, 0.04f, 0.88f});
     text(q, n, -0.94f, -0.80f, "WASD / LEFT STICK MOVE   SHIFT RUN   RMB / RIGHT STICK CAMERA");
@@ -145,6 +146,8 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
     }
     if (!diagnostics)
         return;
+    if (reload_status)
+        text(q, n, -0.94f, -0.70f, reload_status);
     if (diagnostics == 2) {
         quad(q, n, {-0.98f, -0.05f}, {0.60f, 0.71f}, {0.02f, 0.025f, 0.04f, 0.94f});
         text(q, n, -0.94f, 0.67f, "CPU TAG       LIVE KB    PEAK KB    ALLOCS    FRAME B", 0.9f);
@@ -218,7 +221,8 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
                   player.strike_window() ? 1 : 0, enemy.strike_window() ? 1 : 0);
     text(q, n, -0.94f, 0.32f, buffer);
     text(q, n, -0.94f, 0.27f, "BUFFER: 0 NONE  1 LIGHT  2 HEAVY  3 DODGE. EXPIRY IN SIM SECONDS.");
-    text(q, n, -0.94f, 0.22f,
-         encounter.scene_pending() ? "SCENE STAGED: R TO APPLY. F2 FOR MEMORY."
-                                   : "SCENE ACTIVE. F5 VALIDATES EDITS. F2 FOR MEMORY.");
+    std::snprintf(buffer, sizeof(buffer), "TUNING REV %u  PENDING %d  SCENE PENDING %d. F2 MEMORY.",
+                  encounter.tuning().revision, encounter.tuning_pending() ? 1 : 0,
+                  encounter.scene_pending() ? 1 : 0);
+    text(q, n, -0.94f, 0.22f, buffer);
 }

@@ -26,12 +26,12 @@ remote code execution via gameplay netcode.
 | Asset | Entry point | Status |
 |-------|-------------|--------|
 | glTF / GLB meshes | `hue::asset::load_gltf` | **Week 5** — validated, fuzzed |
-| SPIR-V shaders (reload) | `hue::validate_spirv_bytes` | Week 4 boundary check; full reflection hardening in Week 14 |
+| SPIR-V shaders (reload) | `hue::validate_shader_contract` | Week 14 semantic validator and fixed-ABI checks; CPU-only fuzz target |
 | Textures / images (PNG/JPEG) | `load_gltf` / `load_gltf_skinned` | **Week 6** — decoded via stb_image behind caps, fuzzed |
 | Skinned / animated glTF | `hue::asset::load_gltf_skinned` | **Weeks 6–7** — skeleton/clip validation, fuzzed, bounded sampling + GPU palettes |
 | Animation event JSON | `hue::anim::parse_animation_events` | **Weeks 7/12** — 64 KiB/256-event caps, strict schema, clip/time validation; dedicated parser/semantic-validation fuzz target registered in CI |
-| Scene JSON | (not yet) | Week 13, after encounter lifecycle acceptance; code-authored scene remains the scope fallback |
-| Combat tuning JSON | (not yet) | Week 14 |
+| Scene JSON | `parse_scene` | Week 13 bounded schema and reset-boundary staging |
+| Combat tuning JSON | `parse_tuning` | Week 14 bounded schema, clip checks, reset-boundary staging |
 
 ### glTF loader trust boundary (Week 5)
 
@@ -196,8 +196,27 @@ Tests exercise truncation, invalid references/geometry and transactional staging
 
 ## Remaining deferred boundaries
 
-- Shader hot-reload reflection validation + CPU-side validator fuzzing,
-  with separate GPU reload/resource-lifetime tests — Week 14
-- Bounded combat-tuning JSON and safe-boundary commit + dedicated parser
-  fuzz target — Week 14
 - Extended 24–48h fuzz campaign, crash taxonomy, published model — Week 18
+
+## Tuning and shader reload (Week 14)
+
+Tuning uses the same capped JSON subset as scenes, an exact versioned schema,
+finite/ranged values and cross-field constraints. Both real actors validate
+scaled cancel events against their original clip times before staging; reset
+rebinds the animator before editing event storage. Invalid edits preserve active
+and pending data. Original event times prevent repeated reload scaling drift.
+
+Runtime SPIR-V is capped at 128 KiB and 4096 IDs, semantically checked by the
+already-pinned SPIRV-Tools validator (runtime use approved by the owner), then
+checked against seven fixed shader interfaces. Entry stage, locations/types,
+descriptor sets/bindings, block offsets/strides and push constants must match.
+The exact checked byte buffer reaches Vulkan. Replacement pipelines are built
+first; old resources remain until a successful device-idle wait. Failure destroys
+only the candidate. Live handle counters cover modules, layouts and pipelines.
+
+This restricted interface check is not a general shader sandbox or a guarantee
+about driver bugs or shader execution time. SPIRV-Tools uses its own transient
+allocations. CPU parser fuzzing never submits untrusted generated modules to a
+GPU; live reload tests use authored good, truncated and wrong-interface modules.
+`fuzz_tuning` and `fuzz_shader_contract` have corpus and CI smoke registration;
+[Week 14](week14.md) distinguishes measured local results from pending runs.

@@ -85,6 +85,12 @@ void blob_release(SpirvBlob& blob) {
     if (!loaded) {
         return loaded.error();
     }
+    const auto contract = validate_shader_contract(blob.words, blob.byte_size, file_name);
+    if (!contract) {
+        blob_release(blob);
+        HUE_LOG_ERROR("shader ABI or semantic validation failed: %s", path);
+        return contract.error();
+    }
 
     VkShaderModuleCreateInfo module_info{};
     module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -99,6 +105,7 @@ void blob_release(SpirvBlob& blob) {
                       static_cast<int>(result), path);
         return ErrorCode::kUnknown;
     }
+    ++context.live_shader_modules;
     return module;
 }
 
@@ -151,18 +158,21 @@ graphics_pipeline_create(const ContextState& context, const char* shader_directo
     auto fragment_module = shader_module_create(context, shader_directory, frag_name);
     if (!fragment_module) {
         vkDestroyShaderModule(context.device, vertex_module.value(), nullptr);
+        --context.live_shader_modules;
         return fragment_module.error();
     }
 
     struct ModuleGuard {
+        const ContextState& context;
         VkDevice device;
         VkShaderModule vertex;
         VkShaderModule fragment;
         ~ModuleGuard() {
             vkDestroyShaderModule(device, vertex, nullptr);
             vkDestroyShaderModule(device, fragment, nullptr);
+            context.live_shader_modules -= 2;
         }
-    } guard{context.device, vertex_module.value(), fragment_module.value()};
+    } guard{context, context.device, vertex_module.value(), fragment_module.value()};
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -221,8 +231,10 @@ graphics_pipeline_create(const ContextState& context, const char* shader_directo
     if (result != VK_SUCCESS) {
         HUE_LOG_ERROR("vkCreateGraphicsPipelines failed (VkResult %d) for %s",
                       static_cast<int>(result), vert_name);
+        if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(context.device, pipeline, nullptr);
         return ErrorCode::kUnknown;
     }
+    ++context.live_pipelines;
     return pipeline;
 }
 
@@ -238,6 +250,7 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         HUE_VK_TRY(vkCreatePipelineLayout(context.device, &layout_info, nullptr,
                                           &pipeline.triangle_layout));
+        ++context.live_layouts;
     }
     if (pipeline.mesh_layout == VK_NULL_HANDLE) {
         // Set 0: frame UBO. Set 1: material textures. Push constants carry
@@ -258,6 +271,7 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
         layout_info.pPushConstantRanges = &push_range;
         HUE_VK_TRY(vkCreatePipelineLayout(context.device, &layout_info, nullptr,
                                           &pipeline.mesh_layout));
+        ++context.live_layouts;
     }
 
     // ---- triangle: no vertex input, depth test off (always on top)
@@ -270,6 +284,7 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
     if (!triangle) {
         return triangle.error();
     }
+    pipeline.triangle = triangle.value();
 
     // ---- mesh: StaticVertex input, depth tested
     VkVertexInputBindingDescription binding{};
@@ -299,9 +314,9 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
                                          "mesh.frag.spv", pipeline.mesh_layout, color_format,
                                          depth_format, mesh_input, true);
     if (!mesh) {
-        vkDestroyPipeline(context.device, triangle.value(), nullptr);
         return mesh.error();
     }
+    pipeline.mesh = mesh.value();
 
     VkVertexInputBindingDescription skinned_binding{};
     skinned_binding.binding = 0;
@@ -330,10 +345,9 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
                                             "mesh.frag.spv", pipeline.mesh_layout, color_format,
                                             depth_format, skinned_input, true);
     if (!skinned) {
-        vkDestroyPipeline(context.device, triangle.value(), nullptr);
-        vkDestroyPipeline(context.device, mesh.value(), nullptr);
         return skinned.error();
     }
+    pipeline.skinned_mesh = skinned.value();
 
     if (pipeline.hud_layout == VK_NULL_HANDLE) {
         VkPushConstantRange push_range{};
@@ -345,15 +359,13 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
         layout_info.pPushConstantRanges = &push_range;
         HUE_VK_TRY(vkCreatePipelineLayout(context.device, &layout_info, nullptr,
                                           &pipeline.hud_layout));
+        ++context.live_layouts;
     }
 
     auto hud = graphics_pipeline_create(context, shader_directory, "hud.vert.spv",
                                         "hud.frag.spv", pipeline.hud_layout, color_format,
                                         depth_format, empty_input, false, true, true);
     if (!hud) {
-        vkDestroyPipeline(context.device, triangle.value(), nullptr);
-        vkDestroyPipeline(context.device, mesh.value(), nullptr);
-        vkDestroyPipeline(context.device, skinned.value(), nullptr);
         return hud.error();
     }
 
@@ -368,30 +380,37 @@ void pipeline_destroy(PipelineState& pipeline, const ContextState& context) {
     if (pipeline.triangle != VK_NULL_HANDLE) {
         vkDestroyPipeline(context.device, pipeline.triangle, nullptr);
         pipeline.triangle = VK_NULL_HANDLE;
+        --context.live_pipelines;
     }
     if (pipeline.mesh != VK_NULL_HANDLE) {
         vkDestroyPipeline(context.device, pipeline.mesh, nullptr);
         pipeline.mesh = VK_NULL_HANDLE;
+        --context.live_pipelines;
     }
     if (pipeline.skinned_mesh != VK_NULL_HANDLE) {
         vkDestroyPipeline(context.device, pipeline.skinned_mesh, nullptr);
         pipeline.skinned_mesh = VK_NULL_HANDLE;
+        --context.live_pipelines;
     }
     if (pipeline.hud != VK_NULL_HANDLE) {
         vkDestroyPipeline(context.device, pipeline.hud, nullptr);
         pipeline.hud = VK_NULL_HANDLE;
+        --context.live_pipelines;
     }
     if (pipeline.triangle_layout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(context.device, pipeline.triangle_layout, nullptr);
         pipeline.triangle_layout = VK_NULL_HANDLE;
+        --context.live_layouts;
     }
     if (pipeline.mesh_layout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(context.device, pipeline.mesh_layout, nullptr);
         pipeline.mesh_layout = VK_NULL_HANDLE;
+        --context.live_layouts;
     }
     if (pipeline.hud_layout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(context.device, pipeline.hud_layout, nullptr);
         pipeline.hud_layout = VK_NULL_HANDLE;
+        --context.live_layouts;
     }
 }
 

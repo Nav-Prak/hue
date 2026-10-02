@@ -319,3 +319,35 @@ TEST_CASE("encounter: diagnostics retain last AI sense and reset cooldowns") {
     CHECK(f.session->brain().heavy_cooldown() == 0);
     CHECK(f.session->perception().distance == 0);
 }
+
+TEST_CASE("encounter: tuning commits on reset without altering active event tracks") {
+    Fixture f;
+    GameTuning t;
+    t.revision = 2;
+    t.health = 150;
+    t.cancel_close_scale = 0.5f;
+    f.session->start();
+    f.session->buffer(hue::combat::Action::kAttackLight);
+    for (int i = 0; i < 8; ++i)
+        f.tick();
+    CHECK(f.actors[0]->cancel_open());
+    REQUIRE(f.session->stage_tuning(t));
+    CHECK(f.actors[0]->health() == 100);
+    CHECK(f.session->tuning().revision == 1);
+    CHECK(f.actors[0]->cancel_open());
+    auto bad = t;
+    bad.cancel_open_scale = 0.1f;
+    CHECK_FALSE(f.session->stage_tuning(bad));
+    CHECK(f.session->tuning_pending());
+    for (int cycle = 0; cycle < 20; ++cycle) {
+        f.reset();
+        CHECK(f.actors[0]->health() == 150);
+        CHECK(f.session->tuning().revision == 2);
+        CHECK_FALSE(f.session->tuning_pending());
+        f.session->start();
+        f.session->buffer(hue::combat::Action::kAttackLight);
+        for (int i = 0; i < 8; ++i)
+            f.tick();
+        CHECK_FALSE(f.actors[0]->cancel_open());
+    }
+}
