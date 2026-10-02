@@ -1,0 +1,24 @@
+Hue engineering review package - dependency and asset notices
+
+Each dependency's actual license text is included under licenses/.
+Runtime dependencies (statically linked unless stated):
+  GLFW 3.4; Tracy v0.13.1 (including its libbacktrace notice)
+  cgltf and stb_image (versions pinned by the source CMake configuration)
+  Jolt Physics 5.6.0; Vulkan Memory Allocator 3.1.0
+  volk, Vulkan-Headers, SPIRV-Headers and SPIRV-Tools:
+    vulkan-sdk-1.4.304.0-aligned source versions
+  Microsoft C/C++ Release runtime DLLs (Windows package only), selected from
+    the installed toolchain's redistributable set by CMake.
+
+glslang is a build-time shader compiler, not a runtime DLL. Its license is
+included for transparency. SPIRV-Tools now also validates shaders at runtime.
+The operating system and Vulkan graphics driver are external prerequisites,
+not bundled. No Vulkan SDK or compiler is needed to run the game.
+
+Character assets: Kay Lousberg's KayKit Knight and Barbarian plus animations,
+CC0. See assets/models/LICENSE-KayKit.txt and assets/models/README.md for source
+and modifications. Hue's procedural arena and shaders are project-authored.
+
+No project-wide license has been selected for Hue. Dependency/asset notices do
+not grant a license to other project files. This is a local review artifact,
+not a public release or a change to the owner's licensing choices.

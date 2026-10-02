@@ -291,6 +291,32 @@ TEST_CASE("combat character: sub-tick hit window remains observable with owned m
     CHECK_FALSE(actor.strike_window());
 }
 
+TEST_CASE("encounter HUD: bitmap glyphs align to framebuffer pixels at multiple sizes") {
+    Fixture f;
+    std::vector<hue::HudQuad> quads(hue::kMaxHudQuads);
+    for (const auto size : {std::array<unsigned, 2>{1280, 720}, {854, 480}, {2560, 1440}}) {
+        for (unsigned page : {0u, 2u}) {
+            std::uint32_t count = 0;
+            append_combat_hud(quads.data(), count, {}, *f.session, *f.actors[0], *f.actors[1], page,
+                              16.6, 16384, 2, 2, nullptr, size[0], size[1]);
+            REQUIRE(count < hue::kMaxHudQuads);
+            unsigned glyph_quads = 0;
+            for (std::uint32_t i = 0; i < count; ++i) {
+                if (quads[i].color.x != 0.94f)
+                    continue;
+                ++glyph_quads;
+                for (const auto corner : {quads[i].ndc_min, quads[i].ndc_max}) {
+                    const float x = (corner.x + 1) * static_cast<float>(size[0]) * 0.5f;
+                    const float y = (corner.y + 1) * static_cast<float>(size[1]) * 0.5f;
+                    CHECK(std::abs(x - std::round(x)) < 0.002f);
+                    CHECK(std::abs(y - std::round(y)) < 0.002f);
+                }
+            }
+            CHECK(glyph_quads > 100);
+        }
+    }
+}
+
 TEST_CASE("encounter HUD: bounded finite quads with diagnostics and capacity exhaustion") {
     Fixture f;
     std::vector<hue::HudQuad> quads(hue::kMaxHudQuads + 1);

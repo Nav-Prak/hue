@@ -91,6 +91,7 @@ set_tests_properties(encounter_smoke PROPERTIES LABELS "game;smoke" TIMEOUT 180)
 
 if(Python3_FOUND)
     add_test(NAME fight_report_tool COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_fight_report.py)
+    add_test(NAME package_tool COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_package.py)
 endif()
 
 # End-to-end debug channel test: Python drives a live game over TCP.

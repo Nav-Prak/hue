@@ -1,10 +1,11 @@
 # Hue
 
-> A from-scratch C++20/Vulkan third-person combat runtime: custom memory systems, skeletal animation, ECS, Jolt physics, secure fuzz-tested asset loading, runtime combat debug tools, and a playable enemy encounter.
+> A from-scratch C++20/Vulkan third-person combat runtime: custom memory systems, skeletal animation, ECS, Jolt physics, bounded asset loading with fuzz coverage, runtime combat debug tools, and a playable enemy encounter.
 
 Building in public toward November 19, 2026. The engine now integrates
-fixed-tick movement, animation, combat, enemy AI, start/results/restart, and a
-minimal combat diagnostics overlay. See the [Week 12 verification notes](docs/week12.md) and
+fixed-tick movement, animation, combat, enemy AI, start/results/restart,
+combat/memory diagnostics, staged scene/tuning edits, validated shader reload,
+per-fight telemetry and local review packaging. See the [package verification notes](docs/week16.md) and
 [current baseline and revised plan](docs/timeline.md) for implementation versus
 acceptance status.
 
@@ -22,7 +23,8 @@ Run `build/windows-msvc/game/Release/hue.exe` after building (Linux:
 | Light / heavy attack | LMB / E | X / Y |
 | Dodge | Space | B |
 | Toggle lock-on | Tab | Right-stick click |
-| Toggle combat diagnostics | F2 | Back |
+| Cycle game, combat and memory diagnostics | F2 | Back |
+| Stage scene / tuning edits; apply on reset | F5 / F6; R | — |
 | Debug fly camera; quit | F1; Escape | — |
 
 Attack windows and dodge invulnerability follow clip events. Simultaneous lethal
@@ -51,6 +53,34 @@ cmake --build --preset windows-asan
 ctest --preset windows-asan
 ```
 
+## Local review package
+
+Windows packaging requires Python 3.11+ and the existing Release build toolchain.
+Choose a fresh output directory; the tool refuses to overwrite a package:
+
+```sh
+python tools/package.py --build build/windows-msvc --output build/packages/hue-review
+python tools/package.py --verify build/packages/hue-review
+python tests/package_smoke.py build/packages/hue-review
+```
+
+The adjacent ZIP includes the executable, seven compiled shaders, models/events,
+scene/tuning data, MSVC Release runtime DLLs, controls and dependency notices.
+The manifest records file hashes and source revision/dirty state. Extract the
+whole ZIP, then run `hue.exe`; no compiler or Vulkan SDK is needed on the target,
+but Windows x64, SSE4.2 and a Vulkan 1.3 graphics driver are required.
+
+Capture optional local reports with `hue.exe --telemetry C:/writable/fights.jsonl`;
+summarize with `python tools/fight_report.py C:/writable/fights.jsonl`. See
+[telemetry and evidence limits](docs/week15.md). Runtime files and config are
+executable-relative, independent of the launch directory.
+
+This is an engineering review package, not an accepted release. External
+playtesting, physical gamepad, clean-machine acceptance, Linux CI, sustained
+fuzzing and saved Tracy profiling remain open. Hue has no declared project-wide
+license; dependency/asset notices do not choose one for it. Nothing is published
+by these commands.
+
 ## Layout
 
 ```
@@ -62,7 +92,6 @@ ctest --preset windows-asan
   /ecs         # sparse-set ECS
   /physics     # jolt integration layer
   /asset       # gltf import (mesh+skin+anim), shader compile, hot reload
-  /debugui     # planned Week 13: expanded tools; minimal overlay is in /game
 /game          # character/encounter lifecycle, bitmap HUD and combat diagnostics
 /tests         # doctest suites
 /tools         # scripts: shader compile, fuzz harnesses (/tools/fuzz)

@@ -454,6 +454,7 @@ int main(int argc, char** argv) {
     long long max_frames = -1; // run until closed
     bool require_renderer = false;
     bool encounter_smoke = false;
+    bool baseline_hud = false; // reproduce Week 12's two-page smoke scenario
     const char* telemetry_path = nullptr;
     char scene_path[1024];
     char tuning_path[1024];
@@ -472,6 +473,8 @@ int main(int argc, char** argv) {
                 return 1;
             }
             telemetry_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--baseline-hud") == 0) {
+            baseline_hud = true;
         } else if (std::strcmp(argv[i], "--encounter-smoke") == 0) {
             encounter_smoke = true;
             max_frames = 2400;
@@ -872,7 +875,7 @@ int main(int argc, char** argv) {
                 encounter.buffer(hue::combat::Action::kAttackHeavy);
             if (frames % 120 == 60)
                 combat_characters[(frames / 120) % 2 == 0 ? 1 : 0]->apply_damage(1000.0f);
-            diagnostics = static_cast<unsigned>((frames / 120) % 3);
+            diagnostics = static_cast<unsigned>((frames / 120) % (baseline_hud ? 2 : 3));
         }
 
         // Combat input: presses buffer into the state machine, which
@@ -1010,7 +1013,8 @@ int main(int argc, char** argv) {
             append_combat_hud(hud, hud_count, camera, encounter, *combat_characters[0],
                               *combat_characters[1], diagnostics, frame_seconds * 1000.0,
                               animation_arena.value().high_water_mark(), world.alive_count(),
-                              physics.value().character_count(), reload_status);
+                              physics.value().character_count(), reload_status,
+                              hud_status.swapchain_width, hud_status.swapchain_height);
             const auto drawn =
                 renderer.value().draw_frame(camera, draws, draw_count, hud, hud_count);
             if (!drawn) {

@@ -198,6 +198,24 @@ Tests exercise truncation, invalid references/geometry and transactional staging
 
 - Extended 24–48h fuzz campaign, crash taxonomy, published model — Week 18
 
+## Local reports and packaging
+
+Fight telemetry is opt-in local output, not a network service. A fixed-buffer
+formatter emits one schema-versioned line per completed fight; failed writes
+disable recording without stopping combat. The offline Python report reader caps
+line/file/record counts, validates counters and finite timings, rejects incomplete
+records, and excludes automated/injected samples by default. It never evaluates
+input. See [Week 15](week15.md) for tests and evidence limits.
+
+The package builder installs an explicit runtime component, not arbitrary source
+directories, into a fresh destination. Its standard-library ZIP is a distribution
+container, not a new engine pack parser. Manifest verification inventories actual
+files (bounded count/bytes, no symlinks), checks required runtime inputs/notices
+and hashes; it never follows paths supplied by manifest keys. Hashes are not
+signatures and do not establish executable trust. The smoke tool launches only
+the explicitly selected local review package, so do not use it to inspect an
+untrusted download. [Week 16](week16.md) records package and platform limitations.
+
 ## Tuning and shader reload (Week 14)
 
 Tuning uses the same capped JSON subset as scenes, an exact versioned schema,

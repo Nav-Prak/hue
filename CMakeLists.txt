@@ -21,6 +21,7 @@ include(cmake/HueOptions.cmake)
 
 add_subdirectory(engine)
 add_subdirectory(game)
+include(cmake/HuePackage.cmake)
 
 if(HUE_FUZZ)
     add_subdirectory(tools/fuzz)

@@ -9,7 +9,12 @@ ignoring calendar dates. Local commits record tested implementation; external
 playtest, clean-machine, supported-platform and sustained-campaign gates remain
 separate and must not be inferred from those commits. The earlier requirement to
 wait for full external acceptance before scene/tools implementation is superseded.
-See [Week 13 engineering evidence](week13.md). Nothing is published automatically.
+Engineering evidence: [Week 13 diagnostics and scenes](week13.md),
+[Week 14 tuning and shader validation](week14.md), [Week 15 telemetry](week15.md),
+and [Week 16 packaging](week16.md). These are implementation checkpoints, not
+blanket DoD acceptance. Week 17 playtests, Week 18 sustained campaign, Week 19
+release verification and Week 20 publication remain unaccepted. Nothing is
+published automatically.
 
 ## Implementation update — September 22, 2026
 

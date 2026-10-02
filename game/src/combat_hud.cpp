@@ -1,6 +1,7 @@
 // game/src/combat_hud.cpp
 #include "combat_hud.h"
 #include "hue/core/trace.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -43,9 +44,15 @@ void quad(hue::HudQuad* q, std::uint32_t& n, hue::Vec2 a, hue::Vec2 b, hue::Vec4
     if (n < hue::kMaxHudQuads)
         q[n++] = {a, b, color, skew};
 }
-void text(hue::HudQuad* q, std::uint32_t& n, float x, float y, const char* message,
-          float scale = 1.0f) {
-    const float px = 0.0027f * scale, py = 0.0048f * scale;
+void raster_text(hue::HudQuad* q, std::uint32_t& n, float x, float y, const char* message,
+                 float scale, std::uint32_t width, std::uint32_t height) {
+    const float w = static_cast<float>(std::max(width, 1u));
+    const float h = static_cast<float>(std::max(height, 1u));
+    // Whole framebuffer pixels avoid alternating thin/missing bitmap strokes.
+    const float px = 2.0f * std::max(1.0f, std::round(w * 0.00135f * scale)) / w;
+    const float py = 2.0f * std::max(1.0f, std::round(h * 0.0024f * scale)) / h;
+    x = std::round((x + 1.0f) * w * 0.5f) * 2.0f / w - 1.0f;
+    y = std::round((y + 1.0f) * h * 0.5f) * 2.0f / h - 1.0f;
     for (unsigned i = 0; message[i] != '\0' && i < 160; ++i) {
         for (int row = 0; row < 7;) {
             const unsigned bits = glyph_row(message[i], row);
@@ -125,13 +132,19 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
                        const Encounter& encounter, const CombatCharacter& player,
                        const CombatCharacter& enemy, unsigned diagnostics, double frame_ms,
                        std::size_t arena_peak, std::size_t entities, std::uint32_t bodies,
-                       const char* reload_status) {
+                       const char* reload_status, std::uint32_t viewport_width,
+                       std::uint32_t viewport_height) {
     HUE_PROFILE_ZONE("game::combat_hud");
+    const auto text = [viewport_width, viewport_height](hue::HudQuad* output, std::uint32_t& count,
+                                                        float x, float y, const char* message,
+                                                        float scale = 1.0f) {
+        raster_text(output, count, x, y, message, scale, viewport_width, viewport_height);
+    };
     quad(q, n, {-0.98f, -0.98f}, {0.98f, -0.76f}, {0.02f, 0.025f, 0.04f, 0.88f});
     text(q, n, -0.94f, -0.80f, "WASD / LEFT STICK MOVE   SHIFT RUN   RMB / RIGHT STICK CAMERA");
     text(q, n, -0.94f, -0.85f, "LMB / X LIGHT   E / Y HEAVY   SPACE / B DODGE   TAB / R3 LOCK");
     text(q, n, -0.94f, -0.90f,
-         "ENTER / START BEGIN   R RESET   F2 / BACK DEBUG   F5 SCENE RELOAD   ESC QUIT");
+         "ENTER / START BEGIN   R RESET   F2 / BACK DEBUG   F5 SCENE   F6 TUNING   ESC QUIT");
     char buffer[160];
     std::snprintf(
         buffer, sizeof(buffer), "%s   TIME %.1F   LOCK %s", encounter_state_name(encounter.state()),
