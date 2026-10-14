@@ -1,4 +1,4 @@
-HUE - Engineering review build (acceptance pending)
+HUE - Windows v1 candidate (external acceptance waived by owner)
 
 Extract the entire archive before running hue.exe. Keep assets/ and shaders/
 beside it. Windows x64, SSE4.2 CPU and a working Vulkan 1.3 graphics driver are
@@ -24,10 +24,15 @@ Lifecycle regression: hue.exe --encounter-smoke --require-renderer
 The lifecycle smoke injects outcomes; it is not a balance or human playtest.
 
 KNOWN LIMITS / ACCEPTANCE
+On October 14, 2026 the owner waived external acceptance gates to finish the
+existing two-attack scope. Waived does not mean tested or passed. Read
+RELEASE-NOTES.md for the frozen scope, evidence and remaining risks.
 One arena, one enemy, two attacks. No parry, third attack, boss phase, shadows,
 pose interpolation or general editor. Physical gamepad and clean-machine checks,
 two external playtesters, Linux CI, sustained fuzzing and saved Tracy profiling
-are still pending. Frame pacing on the author's PC is not a hardware guarantee.
+have not been completed and no longer block this local candidate. Local tests,
+sanitizers and runtime input validation remain enabled. Frame pacing on the
+author's PC is not a hardware guarantee.
 If Vulkan initialization fails, the normal executable can keep a blank window
 for diagnostics; use --require-renderer to fail explicitly. See terminal output.
 

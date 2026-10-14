@@ -13,6 +13,8 @@ install(FILES "${PROJECT_SOURCE_DIR}/assets/config/arena.json" "${PROJECT_SOURCE
     DESTINATION assets/config COMPONENT HueRuntime)
 install(FILES "${PROJECT_SOURCE_DIR}/docs/package-readme.txt" DESTINATION .
     RENAME README.txt COMPONENT HueRuntime)
+install(FILES "${PROJECT_SOURCE_DIR}/docs/release-candidate.md" DESTINATION .
+    RENAME RELEASE-NOTES.md COMPONENT HueRuntime)
 install(FILES "${PROJECT_SOURCE_DIR}/docs/third-party-notices.txt"
     DESTINATION . COMPONENT HueRuntime)
 

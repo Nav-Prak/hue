@@ -4,12 +4,38 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("hue_package", Path(__file__).resolve().parents[1] / "tools/package.py")
 package = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package)
 
 class PackageTests(unittest.TestCase):
+    def test_candidate_records_waiver_without_claiming_verification(self):
+        self.assertEqual(package.ACCEPTANCE["status"], "owner-waived-external-gates")
+        self.assertEqual(package.ACCEPTANCE["decision_date"], "2026-10-14")
+        self.assertIs(package.ACCEPTANCE["externally_verified"], False)
+        self.assertIn("clean target machine", package.ACCEPTANCE["waived_requirements"])
+        self.assertIn("sustained 24-48-hour fuzz campaign", package.ACCEPTANCE["deferred_evidence"])
+        with self.assertRaisesRegex(ValueError, "RELEASE-NOTES"):
+            package.check_required({}, package.ACCEPTANCE)
+        files = {name: {} for name in package.REQUIRED | {"hue", "RELEASE-NOTES.md"}
+                 | {"shaders/" + name for name in package.SHADERS}}
+        package.check_required(files, package.ACCEPTANCE)
+
+    def test_clean_candidate_refuses_dirty_source_before_building(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Path(package.__file__).resolve().parents[1]
+            (root / "CMakeCache.txt").write_text(
+                f"CMAKE_HOME_DIRECTORY:INTERNAL={source.as_posix()}\n"
+                "CMAKE_BUILD_TYPE:STRING=Release\nHUE_SANITIZE:BOOL=OFF\n")
+            with patch.object(package.subprocess, "check_output", side_effect=["abc\n", " M game.cpp\n"]), patch.object(package.subprocess, "run") as build:
+                with self.assertRaisesRegex(ValueError, "clean source checkout"):
+                    package.package(root, root / "candidate", "cmake", require_clean=True)
+                build.assert_not_called()
+            self.assertFalse((root / "candidate").exists())
+
     def test_manifest_detects_missing_changed_and_extra_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

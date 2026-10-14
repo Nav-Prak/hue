@@ -9,6 +9,16 @@ import zipfile
 
 SHADERS = {name + ".spv" for name in ("triangle.vert", "triangle.frag", "mesh.vert",
            "skinned_mesh.vert", "mesh.frag", "hud.vert", "hud.frag")}
+ACCEPTANCE = {
+    "status": "owner-waived-external-gates",
+    "decision_date": "2026-10-14",
+    "scope": "Windows two-attack v1 candidate",
+    "externally_verified": False,
+    "waived_requirements": ["external playtest acceptance", "clean target machine",
+                            "physical gamepad acceptance", "Linux CI as a Windows completion gate"],
+    "deferred_evidence": ["sustained 24-48-hour fuzz campaign", "saved Tracy CPU/GPU capture",
+                          "interactive balance improvement"],
+}
 REQUIRED = {"assets/models/player.glb", "assets/models/enemy.glb",
     "assets/models/player.events.json", "assets/models/enemy.events.json",
     "assets/models/LICENSE-KayKit.txt", "assets/config/arena.json", "assets/config/tuning.json",
@@ -38,7 +48,10 @@ def inventory(root):
         result[path.relative_to(root).as_posix()] = {"bytes": size, "sha256": digest}
     return dict(sorted(result.items()))
 
-def check_required(files):
+def check_required(files, acceptance=None):
+    # Earlier schema-1 review packages predate the owner's waiver and notes.
+    if isinstance(acceptance, dict) and acceptance.get("status") == ACCEPTANCE["status"] and "RELEASE-NOTES.md" not in files:
+        raise ValueError("owner-waived candidate must include RELEASE-NOTES.md")
     missing = REQUIRED - files.keys()
     if missing:
         raise ValueError(f"missing runtime inputs/notices: {sorted(missing)}")
@@ -63,12 +76,12 @@ def verify(root):
     if not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or manifest.get("schema") != 1:
         raise ValueError("invalid manifest schema")
     files = inventory(root)
-    check_required(files)
+    check_required(files, manifest.get("acceptance"))
     if manifest.get("files") != files:
         raise ValueError("package integrity mismatch")
     return manifest
 
-def package(build, output, cmake):
+def package(build, output, cmake, require_clean=False):
     build, output = build.resolve(), output.resolve()
     archive = output.with_suffix(".zip")
     if output.exists() or archive.exists():
@@ -85,15 +98,21 @@ def package(build, output, cmake):
         raise ValueError("single-configuration build must be configured as Release")
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=source, text=True).strip())
+    if require_clean and dirty:
+        raise ValueError("candidate requires a clean source checkout; commit reviewed changes first")
     # Build before install so stale staging output is not mistaken for this revision.
     subprocess.run([cmake, "--build", str(build), "--config", "Release", "--target", "hue_game"], check=True)
     output.mkdir(parents=True)
     subprocess.run([cmake, "--install", str(build), "--config", "Release", "--component", "HueRuntime", "--prefix", str(output)], check=True)
     files = inventory(output)
-    check_required(files)
+    check_required(files, ACCEPTANCE)
+    final_revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    final_dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=source, text=True).strip())
+    if final_revision != revision or final_dirty != dirty:
+        raise ValueError("source revision/dirty status changed while packaging; choose a fresh destination and retry")
     manifest = {"schema": 1, "project": "Hue", "configuration": "Release",
                 "source_revision": revision, "source_dirty": dirty,
-                "acceptance": "pending external gates", "files": files}
+                "acceptance": ACCEPTANCE, "files": files}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     verify(output)
     with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as zipped:
@@ -111,13 +130,14 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--cmake", default="cmake")
     parser.add_argument("--verify", type=Path)
+    parser.add_argument("--require-clean", action="store_true", help="refuse uncommitted source changes for a candidate")
     args = parser.parse_args()
     try:
         if args.verify:
             verify(args.verify)
             print("package integrity verified (not clean-machine acceptance)")
         elif args.build and args.output:
-            package(args.build, args.output, args.cmake)
+            package(args.build, args.output, args.cmake, args.require_clean)
         else:
             parser.error("use --verify DIRECTORY or --build BUILD --output FRESH_DIRECTORY")
     except (OSError, ValueError, subprocess.SubprocessError) as exc:

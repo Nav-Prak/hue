@@ -2,6 +2,19 @@
 
 **July 6 → November 19, 2026.** Twenty numbered weeks; the final week is four days. From-scratch C++20/Vulkan third-person combat runtime, built in public. November 19 is Hue's project target, independent of external release schedules.
 
+## Fast track scope decision — October 14, 2026
+
+The owner now authorizes bypassing external acceptance gates. The two-attack
+Windows v1 scope is frozen; external playtest, clean-machine, physical-gamepad and
+Linux CI acceptance no longer block the local candidate. Extended fuzz/profiling
+and human balance evidence remain unperformed/deferred, not passed. Local tests,
+sanitizers, runtime validation and CI jobs remain enabled. Optional content and
+engine expansion stay out of scope. See [the candidate scope and risks](release-candidate.md).
+
+This supersedes the stop-at-unmet-gates decision. Original weekly targets below
+remain historical requirements, not blanket completion claims. Publication and
+pushing still require the owner's review and instruction.
+
 ## Engineering sequencing update — October 2, 2026
 
 The owner authorized proceeding through independent engineering milestones,

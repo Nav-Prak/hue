@@ -2,7 +2,10 @@
 
 > A from-scratch C++20/Vulkan third-person combat runtime: custom memory systems, skeletal animation, ECS, Jolt physics, bounded asset loading with fuzz coverage, runtime combat debug tools, and a playable enemy encounter.
 
-Building in public toward November 19, 2026. The engine now integrates
+The two-attack Windows v1 implementation is frozen as a local candidate. On
+October 14, 2026 the owner waived external acceptance gates to finish this scope
+quickly; unperformed checks are not claimed as passed. See
+[candidate scope, verification and risks](docs/release-candidate.md). The engine integrates
 fixed-tick movement, animation, combat, enemy AI, start/results/restart,
 combat/memory diagnostics, staged scene/tuning edits, validated shader reload,
 per-fight telemetry and local review packaging. See the [package verification notes](docs/week16.md) and
@@ -59,7 +62,7 @@ Windows packaging requires Python 3.11+ and the existing Release build toolchain
 Choose a fresh output directory; the tool refuses to overwrite a package:
 
 ```sh
-python tools/package.py --build build/windows-msvc --output build/packages/hue-review
+python tools/package.py --build build/windows-msvc --output build/packages/hue-review --require-clean
 python tools/package.py --verify build/packages/hue-review
 python tests/package_smoke.py build/packages/hue-review
 ```
@@ -75,9 +78,11 @@ summarize with `python tools/fight_report.py C:/writable/fights.jsonl`. See
 [telemetry and evidence limits](docs/week15.md). Runtime files and config are
 executable-relative, independent of the launch directory.
 
-This is an engineering review package, not an accepted release. External
-playtesting, physical gamepad, clean-machine acceptance, Linux CI, sustained
-fuzzing and saved Tracy profiling remain open. Hue has no declared project-wide
+This is a local candidate with owner-waived external gates, not an externally
+verified release. Playtests, physical gamepad, clean-machine and Linux checks
+have not been completed. Sustained fuzzing, interactive balance evidence and saved
+Tracy profiling are deferred; local checks and runtime validation remain enabled.
+Hue has no declared project-wide
 license; dependency/asset notices do not choose one for it. Nothing is published
 by these commands.
 
