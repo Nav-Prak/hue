@@ -94,7 +94,8 @@ Vulkan 1.3 driver are required. Keep assets and shaders beside the executable.
 the diagnostic fallback. Start with Enter, attack with LMB/E, dodge with Space,
 lock with Tab, move with WASD, orbit with RMB and restart with R.
 
-No push, tag, public release, upload, application or marketing publication is
-authorized by the waiver. The owner reviews local commits before pushing. A
+The owner separately authorized pushing the completed source commits on
+October 14. No tag, public release, binary upload, application or marketing
+publication is authorized by the acceptance waiver or source push. A
 project-wide license has not been selected; dependency notices do not supply
 one for Hue. No new license or redistribution permission is granted here.

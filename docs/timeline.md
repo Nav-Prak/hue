@@ -12,8 +12,9 @@ sanitizers, runtime validation and CI jobs remain enabled. Optional content and
 engine expansion stay out of scope. See [the candidate scope and risks](release-candidate.md).
 
 This supersedes the stop-at-unmet-gates decision. Original weekly targets below
-remain historical requirements, not blanket completion claims. Publication and
-pushing still require the owner's review and instruction.
+remain historical requirements, not blanket completion claims. The owner
+separately authorized pushing the completed source commits on October 14;
+binary releases and other publication still require separate instruction.
 
 ## Engineering sequencing update — October 2, 2026
 
