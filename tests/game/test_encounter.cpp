@@ -135,16 +135,16 @@ TEST_CASE("encounter: twenty restarts restore actors physics counters and owned 
         CHECK(f.session->state() == EncounterState::kReady);
         CHECK(f.session->stats().ticks == 0);
         CHECK(f.session->stats().hits[0] == 0);
-        CHECK(f.session->hitstop() == 0);
+        CHECK(f.session->hitstop() == 0.0f);
         CHECK(f.session->ai_state() == hue::combat::AiState::kIdle);
         CHECK_FALSE(f.session->locked());
         for (unsigned i = 0; i < 2; ++i) {
-            CHECK(f.actors[i]->health() == 100);
-            CHECK(f.actors[i]->poise() == 40);
+            CHECK(f.actors[i]->health() == 100.0f);
+            CHECK(f.actors[i]->poise() == 40.0f);
             CHECK(f.actors[i]->activation() == 0);
             CHECK_FALSE(f.actors[i]->invulnerable());
             CHECK(f.actors[i]->buffered_action() == hue::combat::Action::kNone);
-            CHECK(f.physics.value().character_velocity(i).y == 0);
+            CHECK(f.physics.value().character_velocity(i).y == 0.0f);
             CHECK(f.session->position(i).x == doctest::Approx(kEncounterSpawns[i].x));
             CHECK(f.session->yaw(i) == doctest::Approx(kEncounterYaw[i]));
         }
@@ -356,7 +356,7 @@ TEST_CASE("encounter: scene staging preserves live state and rejects invalid can
     CHECK(f.session->scene().spawns[0].x == doctest::Approx(-0.8));
     for (int i = 0; i < 20; ++i) {
         f.reset();
-        CHECK(f.session->position(0).x == -2);
+        CHECK(f.session->position(0).x == -2.0f);
         CHECK_FALSE(f.session->scene_pending());
         CHECK(f.physics.value().character_count() == 2);
     }
@@ -368,13 +368,13 @@ TEST_CASE("encounter: diagnostics retain last AI sense and reset cooldowns") {
     for (int i = 0; i < 30; ++i)
         f.tick();
     CHECK(f.session->perception().line_of_sight);
-    CHECK(f.session->perception().distance > 0);
-    CHECK(f.session->brain().light_cooldown() >= 0);
-    CHECK(f.session->brain().heavy_cooldown() >= 0);
+    CHECK(f.session->perception().distance > 0.0f);
+    CHECK(f.session->brain().light_cooldown() >= 0.0f);
+    CHECK(f.session->brain().heavy_cooldown() >= 0.0f);
     f.reset();
-    CHECK(f.session->brain().light_cooldown() == 0);
-    CHECK(f.session->brain().heavy_cooldown() == 0);
-    CHECK(f.session->perception().distance == 0);
+    CHECK(f.session->brain().light_cooldown() == 0.0f);
+    CHECK(f.session->brain().heavy_cooldown() == 0.0f);
+    CHECK(f.session->perception().distance == 0.0f);
 }
 
 TEST_CASE("encounter: tuning commits on reset without altering active event tracks") {
@@ -389,7 +389,7 @@ TEST_CASE("encounter: tuning commits on reset without altering active event trac
         f.tick();
     CHECK(f.actors[0]->cancel_open());
     REQUIRE(f.session->stage_tuning(t));
-    CHECK(f.actors[0]->health() == 100);
+    CHECK(f.actors[0]->health() == 100.0f);
     CHECK(f.session->tuning().revision == 1);
     CHECK(f.actors[0]->cancel_open());
     auto bad = t;
@@ -398,7 +398,7 @@ TEST_CASE("encounter: tuning commits on reset without altering active event trac
     CHECK(f.session->tuning_pending());
     for (int cycle = 0; cycle < 20; ++cycle) {
         f.reset();
-        CHECK(f.actors[0]->health() == 150);
+        CHECK(f.actors[0]->health() == 150.0f);
         CHECK(f.session->tuning().revision == 2);
         CHECK_FALSE(f.session->tuning_pending());
         f.session->start();

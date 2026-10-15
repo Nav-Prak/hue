@@ -7,7 +7,7 @@ constexpr char kTuning[] =
 TEST_CASE("tuning: bounded schema and relational validation") {
     auto parsed = parse_tuning(kTuning, sizeof(kTuning) - 1);
     REQUIRE(parsed);
-    CHECK(parsed.value().run_speed == 4);
+    CHECK(parsed.value().run_speed == 4.0f);
     for (std::size_t i = 0; i < sizeof(kTuning) - 1; ++i)
         CHECK_FALSE(parse_tuning(kTuning, i));
     GameTuning t;
