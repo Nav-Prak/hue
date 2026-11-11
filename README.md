@@ -80,7 +80,8 @@ executable-relative, independent of the launch directory.
 
 This is a local candidate with owner-waived external gates, not an externally
 verified release. Playtests, physical gamepad, clean-machine and Linux checks
-have not been completed. Sustained fuzzing, interactive balance evidence and saved
+have not been completed. Sustained fuzzing (a [prepared, unrun campaign runner](docs/fuzz-campaign.md)
+exists), interactive balance evidence and saved
 Tracy profiling are deferred; local checks and runtime validation remain enabled.
 Hue has no declared project-wide
 license; dependency/asset notices do not choose one for it. Nothing is published

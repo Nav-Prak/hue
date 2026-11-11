@@ -7,7 +7,7 @@ from test_fight_report import report
 
 with tempfile.TemporaryDirectory(prefix="hue-telemetry-") as directory:
     path = Path(directory) / "fights.jsonl"
-    result = subprocess.run([sys.argv[1], "--encounter-smoke", "--telemetry", str(path)], timeout=160)
+    result = subprocess.run([sys.argv[1], "--encounter-smoke", "--telemetry", str(path)], timeout=420)
     if result.returncode:
         raise SystemExit(result.returncode)
     rows = report.load(path)

@@ -196,7 +196,9 @@ Tests exercise truncation, invalid references/geometry and transactional staging
 
 ## Remaining deferred boundaries
 
-- Extended 24–48h fuzz campaign, crash taxonomy, published model — Week 18
+- Extended 24–48h fuzz campaign, crash taxonomy, published model — Week 18.
+  A resumable one-worker runner and procedure exist
+  ([fuzz-campaign.md](fuzz-campaign.md)); no sustained campaign has been run.
 
 ## Local reports and packaging
 

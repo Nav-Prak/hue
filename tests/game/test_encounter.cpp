@@ -294,8 +294,9 @@ TEST_CASE("combat character: sub-tick hit window remains observable with owned m
 TEST_CASE("encounter HUD: bitmap glyphs align to framebuffer pixels at multiple sizes") {
     Fixture f;
     std::vector<hue::HudQuad> quads(hue::kMaxHudQuads);
-    for (const auto size : {std::array<unsigned, 2>{1280, 720}, {854, 480}, {2560, 1440}}) {
-        for (unsigned page : {0u, 2u}) {
+    for (const auto size : {std::array<unsigned, 2>{1280, 720}, {854, 480}, {2560, 1440},
+                            {800, 600}, {1920, 1080}, {3440, 1440}, {3840, 2160}}) {
+        for (unsigned page : {0u, 1u, 2u}) {
             std::uint32_t count = 0;
             append_combat_hud(quads.data(), count, {}, *f.session, *f.actors[0], *f.actors[1], page,
                               16.6, 16384, 2, 2, nullptr, size[0], size[1]);
@@ -310,6 +311,10 @@ TEST_CASE("encounter HUD: bitmap glyphs align to framebuffer pixels at multiple 
                     const float y = (corner.y + 1) * static_cast<float>(size[1]) * 0.5f;
                     CHECK(std::abs(x - std::round(x)) < 0.002f);
                     CHECK(std::abs(y - std::round(y)) < 0.002f);
+                    CHECK(corner.x >= -1.0f);
+                    CHECK(corner.x <= 1.0f);
+                    CHECK(corner.y >= -1.0f);
+                    CHECK(corner.y <= 1.0f);
                 }
             }
             CHECK(glyph_quads > 100);

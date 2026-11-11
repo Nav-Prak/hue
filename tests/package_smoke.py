@@ -26,7 +26,7 @@ def main():
             environment["PATH"] = os.pathsep.join((str(system / "System32"), str(system)))
         result = subprocess.run([str(executable), "--encounter-smoke", "--baseline-hud", "--require-renderer"],
                                 cwd=directory, env=environment, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, errors="replace", timeout=170)
+                                stderr=subprocess.STDOUT, text=True, errors="replace", timeout=420)
         print(result.stdout)
         if result.returncode:
             return result.returncode

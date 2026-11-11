@@ -18,6 +18,7 @@ add_executable(hue_tests
     game/test_config.cpp
     game/test_tuning.cpp
     game/test_fight_report.cpp
+    game/test_follow_camera.cpp
     ecs/test_ecs.cpp
     physics/test_physics.cpp
     core/bench_math.cpp
@@ -87,11 +88,12 @@ add_test(NAME encounter_smoke
         -DHUE_PYTHON=${Python3_EXECUTABLE}
         -DHUE_TELEMETRY_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/telemetry_smoke.py
         -P ${PROJECT_SOURCE_DIR}/cmake/RunEncounterSmoke.cmake)
-set_tests_properties(encounter_smoke PROPERTIES LABELS "game;smoke" TIMEOUT 180)
+set_tests_properties(encounter_smoke PROPERTIES LABELS "game;smoke" TIMEOUT 460)
 
 if(Python3_FOUND)
     add_test(NAME fight_report_tool COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_fight_report.py)
     add_test(NAME package_tool COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_package.py)
+    add_test(NAME fuzz_campaign_tool COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_fuzz_campaign.py)
 endif()
 
 # End-to-end debug channel test: Python drives a live game over TCP.

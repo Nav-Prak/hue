@@ -49,11 +49,20 @@ void raster_text(hue::HudQuad* q, std::uint32_t& n, float x, float y, const char
     const float w = static_cast<float>(std::max(width, 1u));
     const float h = static_cast<float>(std::max(height, 1u));
     // Whole framebuffer pixels avoid alternating thin/missing bitmap strokes.
-    const float px = 2.0f * std::max(1.0f, std::round(w * 0.00135f * scale)) / w;
-    const float py = 2.0f * std::max(1.0f, std::round(h * 0.0024f * scale)) / h;
+    unsigned length = 0;
+    while (length < 160 && message[length] != '\0')
+        ++length;
+    // Square pixels at every aspect ratio. Fit long diagnostic/control rows
+    // before drawing, rather than silently running beyond the right edge.
+    const float desired = std::round(std::min(w / 1280.0f, h / 720.0f) * 2.0f * scale);
+    const float columns = static_cast<float>(std::max(1u, length * 6u));
+    const float fit = std::floor((1.0f - x) * w * 0.5f / columns);
+    const float pixels = std::max(1.0f, std::min(desired, fit));
+    const float px = 2.0f * pixels / w;
+    const float py = 2.0f * pixels / h;
     x = std::round((x + 1.0f) * w * 0.5f) * 2.0f / w - 1.0f;
     y = std::round((y + 1.0f) * h * 0.5f) * 2.0f / h - 1.0f;
-    for (unsigned i = 0; message[i] != '\0' && i < 160; ++i) {
+    for (unsigned i = 0; i < length && x + 5.0f * px <= 1.0f; ++i) {
         for (int row = 0; row < 7;) {
             const unsigned bits = glyph_row(message[i], row);
             int end_row = row + 1;
@@ -151,9 +160,9 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
         static_cast<double>(encounter.stats().ticks) / 60.0, encounter.locked() ? "ON" : "OFF");
     text(q, n, -0.42f, 0.78f, buffer);
     if (encounter.state() != EncounterState::kFighting) {
-        quad(q, n, {-0.70f, 0.02f}, {0.70f, 0.27f}, {0.025f, 0.035f, 0.06f, 0.92f});
-        text(q, n, -0.25f, 0.23f, encounter_state_name(encounter.state()), 2.0f);
-        text(q, n, -0.54f, 0.10f,
+        quad(q, n, {-0.70f, 0.47f}, {0.70f, 0.72f}, {0.025f, 0.035f, 0.06f, 0.92f});
+        text(q, n, -0.25f, 0.68f, encounter_state_name(encounter.state()), 2.0f);
+        text(q, n, -0.54f, 0.55f,
              encounter.state() == EncounterState::kReady ? "ENTER / START TO FIGHT"
                                                          : "ENTER / START OR R TO RESTART");
     }

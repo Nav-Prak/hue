@@ -3,8 +3,8 @@
 // Week 8 third-person follow camera: spring-arm boom behind the player
 // with a physics collision probe. Hold right mouse to orbit; the arm
 // shortens instantly when geometry intrudes and relaxes back slowly.
-// Week 9 lock-on: an optional target eases the yaw toward the line
-// player -> target so the enemy stays framed while strafing.
+// An angled shoulder view separates the two fighters on screen. Lock-on
+// preserves that angle; both shoulder offset and boom probe static geometry.
 
 #pragma once
 
@@ -29,11 +29,12 @@ public:
 private:
     [[nodiscard]] hue::Vec3 forward() const;
 
-    float m_yaw = -hue::kPi * 0.5f; // start behind player, facing the opponent (+X)
-    float m_pitch = -0.30f;         // negative looks down at the character
-    float m_arm_length = 4.0f;
+    float m_yaw = -hue::kPi * 0.5f + 0.65f; // oblique view toward the opponent (+X)
+    float m_pitch = -0.30f;                 // negative looks down at the character
+    float m_arm_length = 4.8f;
     hue::Vec3 m_pivot{-0.8f, 1.5f, 3.0f};
     hue::Vec3 m_pivot_velocity{};
+    hue::Vec3 m_focus{-0.8f, 1.5f, 3.0f};
     hue::Vec3 m_position{};
     hue::Vec3 m_shake{};
     hue::Vec3 m_shake_velocity{};

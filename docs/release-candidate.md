@@ -70,9 +70,41 @@ The original isolated pacing run was uneven (p50 1.282 ms / p95 33.363 ms).
 A foregrounded repeat measured 16.681 / 16.895 ms on RTX 5090 at 1280x720;
 these are presentation-paced wall intervals, not isolated CPU/GPU timings. Other
 machines, prolonged play, gamepad handling and combat fairness are not certified.
-The close follow camera can obscure the enemy at the initial alignment. Short
+The close follow camera that could obscure the enemy at the initial alignment
+was replaced by the November 11 shoulder view below; its framing is covered by
+projection tests, not by a human readability check. Short
 fuzz runs and passing sanitizers are not a security proof; local shader-validator
 fuzz execution remains unverified despite its registered CI harness.
+
+## November 11 completion pass
+
+The work left uncommitted after the October 14 freeze was verified and landed;
+no scope was added.
+
+- **Camera.** The follow camera is now an angled over-the-shoulder view with a
+  longer boom (4.8 m), and lock-on keeps that angle so the enemy stays beside
+  the player rather than behind them. The shoulder offset and boom both probe
+  static geometry, and a new obstruction shortens the boom on the same frame.
+  Tests project both fighters at 4:3, 16:9 and 21:9 and exercise both probes.
+- **HUD.** Bitmap text uses square pixels at every aspect ratio and shrinks to
+  fit rather than running off the right edge; the ready/result banner moved off
+  the fighters. Pixel-alignment and on-screen checks cover seven framebuffer
+  sizes and all three diagnostic pages.
+- **Fuzz campaign runner.** `tools/fuzz_campaign.py` and
+  [its procedure](fuzz-campaign.md) prepare the deferred sustained run; CI
+  exercises the runner for 15 seconds. The 24–48-hour campaign itself has still
+  not been run.
+- **Smoke timeouts.** The rendered encounter and package smokes are paced by
+  presentation. On this pass the desktop presented at about 11 frames per
+  second (the October package build measured the same in the same session), so
+  the 2,400-frame run needed about 180 s and exceeded its 160 s limit. The limits
+  are now 420 s; the gameplay assertions are unchanged.
+
+Verification on the development machine (RTX 5090, MSVC): Windows Release
+161/161 CTest tests (138.49 s); Windows ASan 161/161 (292.35 s). Logs: `build/final-release-ctest.log`
+and `build/final-asan-ctest.log`. Nobody has looked at the new camera or HUD in
+a running window on this pass, and the owner-waived and deferred items above are
+unchanged.
 
 ## Reproduce and review
 

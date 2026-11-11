@@ -3,14 +3,16 @@
 #include "follow_camera.h"
 
 #include "hue/core/spring.h"
+#include "hue/core/trace.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
 constexpr float kLookSensitivity = 0.0025f; // radians per pixel
 constexpr float kPitchMin = -1.15f;         // steep look down
 constexpr float kPitchMax = 0.45f;          // shallow look up
-constexpr float kDesiredArm = 4.0f;         // meters behind the pivot
+constexpr float kDesiredArm = 4.8f;         // meters behind the pivot
 constexpr float kMinArm = 0.4f;
 constexpr float kProbeMargin = 0.25f; // keep the near plane off walls
 constexpr float kPivotHeight = 1.5f;  // chest height on the rig
@@ -20,7 +22,9 @@ constexpr float kArmOutOmega = 5.0f;  // relax out slowly
 constexpr float kFovYRadians = hue::radians(55.0f);
 constexpr float kNearPlane = 0.1f;
 constexpr float kFarPlane = 200.0f;
-constexpr float kLockYawOmega = 6.0f; // lock-on bias stiffness
+constexpr float kLockYawOmega = 6.0f;    // lock-on bias stiffness
+constexpr float kLockFrameAngle = 0.65f; // keep the enemy beside, not behind, the player
+constexpr float kShoulderOffset = 0.85f;
 constexpr float kShakeOmega = 18.0f;
 
 [[nodiscard]] float wrap_pi(float radians_in) noexcept {
@@ -40,6 +44,7 @@ hue::Vec3 FollowCamera::forward() const {
 void FollowCamera::update(const hue::Input& input, float dt, hue::Vec3 target_feet,
                           const hue::physics::PhysicsWorld& physics, const hue::Vec3* lock_target) {
     using namespace hue;
+    HUE_PROFILE_ZONE("game::follow_camera");
 
     if (input.mouse_down(mouse::kRight)) {
         m_yaw -= static_cast<float>(input.mouse_dx()) * kLookSensitivity;
@@ -64,7 +69,7 @@ void FollowCamera::update(const hue::Input& input, float dt, hue::Vec3 target_fe
     if (lock_target != nullptr) {
         const Vec3 to_target{lock_target->x - target_feet.x, 0.0f, lock_target->z - target_feet.z};
         if (length_squared(to_target) > 0.01f) {
-            const float desired_yaw = std::atan2(-to_target.x, -to_target.z);
+            const float desired_yaw = std::atan2(-to_target.x, -to_target.z) + kLockFrameAngle;
             m_yaw += damp(0.0f, wrap_pi(desired_yaw - m_yaw), kLockYawOmega, dt);
         }
     }
@@ -78,19 +83,32 @@ void FollowCamera::update(const hue::Input& input, float dt, hue::Vec3 target_fe
         spring_damp(m_pivot, m_pivot_velocity, pivot_target, kPivotOmega, dt);
     }
 
-    // Spring-arm probe: cast from the pivot toward the desired camera spot;
+    // Probe the shoulder displacement too; otherwise the offset itself could
+    // place the boom origin inside a wall. Keep locomotion's yaw basis aligned
+    // with the camera by translating both its eye and aim point together.
+    const Vec3 right{std::cos(m_yaw), 0.0f, -std::sin(m_yaw)};
+    float shoulder = kShoulderOffset;
+    const auto shoulder_hit = physics.cast_ray(m_pivot, right, shoulder + kProbeMargin);
+    if (shoulder_hit.hit)
+        shoulder = clamp(shoulder_hit.fraction * (shoulder + kProbeMargin) - kProbeMargin, 0.0f,
+                         kShoulderOffset);
+    m_focus = m_pivot + right * shoulder;
+
+    // Spring-arm probe: cast from the focus toward the desired camera spot;
     // anything static in the way shortens the boom.
     const Vec3 back = forward() * -1.0f;
     float allowed_arm = kDesiredArm;
-    const physics::RayHit hit = physics.cast_ray(m_pivot, back, kDesiredArm + kProbeMargin);
+    const physics::RayHit hit = physics.cast_ray(m_focus, back, kDesiredArm + kProbeMargin);
     if (hit.hit) {
         allowed_arm = hit.fraction * (kDesiredArm + kProbeMargin) - kProbeMargin;
         allowed_arm = clamp(allowed_arm, kMinArm, kDesiredArm);
     }
     const float omega = allowed_arm < m_arm_length ? kArmInOmega : kArmOutOmega;
     m_arm_length = damp(m_arm_length, allowed_arm, omega, dt);
+    // Never smooth through an obstruction on the first blocked frame.
+    m_arm_length = std::min(m_arm_length, allowed_arm);
 
-    m_position = m_pivot + back * m_arm_length;
+    m_position = m_focus + back * m_arm_length;
     spring_damp(m_shake, m_shake_velocity, hue::Vec3{}, kShakeOmega, dt);
     m_position = m_position + m_shake;
 }
@@ -109,7 +127,7 @@ void FollowCamera::add_impulse(hue::Vec3 velocity) noexcept {
 
 hue::Camera FollowCamera::camera(float aspect) const {
     hue::Camera out;
-    out.view = hue::Mat4::look_at(m_position, m_pivot, {0.0f, 1.0f, 0.0f});
+    out.view = hue::Mat4::look_at(m_position, m_focus, {0.0f, 1.0f, 0.0f});
     out.projection = hue::Mat4::perspective(kFovYRadians, aspect, kNearPlane, kFarPlane);
     return out;
 }
