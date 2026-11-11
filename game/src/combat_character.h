@@ -23,10 +23,13 @@
 
 class CombatCharacter {
 public:
-    CombatCharacter(hue::asset::SkinnedMeshData&& data, hue::anim::AnimationEventTrack&& events,
-                    hue::MeshHandle mesh, std::uint32_t draw_index)
-        : m_data(std::move(data)), m_events(std::move(events)), m_mesh(mesh),
-          m_draw_index(draw_index) {}
+    // The rig data and source event track are shared between every actor that
+    // uses the same rig and must outlive the character. Each character keeps
+    // its own copy of the events because tuning rescales their times.
+    CombatCharacter(const hue::asset::SkinnedMeshData& data,
+                    const hue::anim::AnimationEventTrack& events, hue::MeshHandle mesh,
+                    std::uint32_t draw_index)
+        : m_data(data), m_source_events(events), m_mesh(mesh), m_draw_index(draw_index) {}
 
     CombatCharacter(const CombatCharacter&) = delete;
     CombatCharacter& operator=(const CombatCharacter&) = delete;
@@ -95,7 +98,8 @@ private:
     [[nodiscard]] hue::Result<void> start_state_clip(hue::combat::State state);
     void retain_pose(const hue::anim::AnimationFrame& frame, hue::MeshDraw* draws) noexcept;
 
-    hue::asset::SkinnedMeshData m_data;
+    const hue::asset::SkinnedMeshData& m_data;
+    const hue::anim::AnimationEventTrack& m_source_events;
     hue::anim::AnimationEventTrack m_events;
     float m_original_event_times[hue::anim::kMaxAnimationEvents]{};
     GameTuning m_tuning{};

@@ -7,6 +7,7 @@ add_library(hue_gameplay STATIC
     src/scene_config.cpp
     src/runtime_files.cpp
     src/fight_report.cpp
+    src/actor_roster.cpp
     src/encounter.cpp
     src/combat_hud.cpp
     src/combat_character.cpp

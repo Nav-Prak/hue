@@ -9,7 +9,9 @@ foreach(model player.glb enemy.glb player.events.json enemy.events.json LICENSE-
     install(FILES "${PROJECT_SOURCE_DIR}/assets/models/${model}"
         DESTINATION assets/models COMPONENT HueRuntime)
 endforeach()
-install(FILES "${PROJECT_SOURCE_DIR}/assets/config/arena.json" "${PROJECT_SOURCE_DIR}/assets/config/tuning.json"
+install(FILES "${PROJECT_SOURCE_DIR}/assets/config/arena.json"
+    "${PROJECT_SOURCE_DIR}/assets/config/gauntlet.json"
+    "${PROJECT_SOURCE_DIR}/assets/config/tuning.json"
     DESTINATION assets/config COMPONENT HueRuntime)
 install(FILES "${PROJECT_SOURCE_DIR}/docs/package-readme.txt" DESTINATION .
     RENAME README.txt COMPONENT HueRuntime)

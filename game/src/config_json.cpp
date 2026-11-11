@@ -70,12 +70,56 @@ public:
         const auto parsed = std::from_chars(begin, p, out);
         return parsed.ec == std::errc{} && parsed.ptr == p && std::isfinite(out);
     }
+    // String, number, or one to four numbers. The opening '[' of an array may
+    // already have been consumed by a caller that had to look past it.
+    bool value(ConfigField& field, bool array_open = false) {
+        space();
+        if (!array_open && p != end && *p == '"') {
+            field.is_string = true;
+            return string(field.string);
+        }
+        if (array_open || take('[')) {
+            field.is_array = true;
+            do {
+                if (field.count == 4 || !number(field.numbers[field.count++]))
+                    return false;
+            } while (take(','));
+            return take(']');
+        }
+        field.count = 1;
+        return number(field.numbers[0]);
+    }
+    // Reads `"key":` into fields[count], rejecting overflow and duplicates.
+    bool key(ConfigField* fields, unsigned count, unsigned capacity, ConfigField*& out) {
+        if (count >= capacity)
+            return false;
+        out = &fields[count];
+        *out = ConfigField{};
+        if (!string(out->key))
+            return false;
+        for (unsigned i = 0; i < count; ++i)
+            if (std::strcmp(fields[i].key, out->key) == 0)
+                return false;
+        return take(':');
+    }
 };
-} // namespace
-const ConfigField* ConfigObject::find(const char* key) const noexcept {
+const ConfigField* find_field(const ConfigField* fields, unsigned count, const char* key) noexcept {
     for (unsigned i = 0; i < count; ++i)
         if (std::strcmp(fields[i].key, key) == 0)
             return &fields[i];
+    return nullptr;
+}
+} // namespace
+const ConfigField* ConfigObject::find(const char* key) const noexcept {
+    return find_field(fields, count, key);
+}
+const ConfigField* ConfigRecord::find(const char* key) const noexcept {
+    return find_field(fields, count, key);
+}
+const ConfigList* ConfigDocument::list(const char* key) const noexcept {
+    for (unsigned i = 0; i < list_count; ++i)
+        if (std::strcmp(lists[i].key, key) == 0)
+            return &lists[i];
     return nullptr;
 }
 hue::Result<ConfigObject> parse_config_json(const void* data, std::size_t size) {
@@ -89,29 +133,9 @@ hue::Result<ConfigObject> parse_config_json(const void* data, std::size_t size) 
         return hue::ErrorCode::kCorruptData;
     if (!r.take('}')) {
         do {
-            if (result.count == 32)
+            ConfigField* field = nullptr;
+            if (!r.key(result.fields, result.count, 32, field) || !r.value(*field))
                 return hue::ErrorCode::kCorruptData;
-            auto& field = result.fields[result.count];
-            if (!r.string(field.key) || result.find(field.key) || !r.take(':'))
-                return hue::ErrorCode::kCorruptData;
-            r.space();
-            if (r.p != r.end && *r.p == '"') {
-                field.is_string = true;
-                if (!r.string(field.string))
-                    return hue::ErrorCode::kCorruptData;
-            } else if (r.take('[')) {
-                field.is_array = true;
-                do {
-                    if (field.count == 4 || !r.number(field.numbers[field.count++]))
-                        return hue::ErrorCode::kCorruptData;
-                } while (r.take(','));
-                if (!r.take(']'))
-                    return hue::ErrorCode::kCorruptData;
-            } else {
-                field.count = 1;
-                if (!r.number(field.numbers[0]))
-                    return hue::ErrorCode::kCorruptData;
-            }
             ++result.count;
         } while (r.take(','));
         if (!r.take('}'))
@@ -121,4 +145,76 @@ hue::Result<ConfigObject> parse_config_json(const void* data, std::size_t size) 
     if (r.p != r.end)
         return hue::ErrorCode::kCorruptData;
     return result;
+}
+hue::Result<void> parse_config_document(const void* data, std::size_t size, ConfigDocument& out) {
+    HUE_PROFILE_ZONE("game::parse_config_document");
+    if (!data || size == 0 || size > kDocumentMaxBytes)
+        return hue::ErrorCode::kCorruptData;
+    const auto* bytes = static_cast<const char*>(data);
+    Reader r{bytes, bytes + size};
+    out.root.count = 0;
+    out.list_count = 0;
+    if (!r.take('{'))
+        return hue::ErrorCode::kCorruptData;
+    if (!r.take('}')) {
+        do {
+            // The key is read into root storage first and moves to a list when
+            // the value turns out to be an array of records.
+            ConfigField* field = nullptr;
+            if (!r.key(out.root.fields, out.root.count, 32, field))
+                return hue::ErrorCode::kCorruptData;
+            for (unsigned i = 0; i < out.list_count; ++i)
+                if (std::strcmp(out.lists[i].key, field->key) == 0)
+                    return hue::ErrorCode::kCorruptData;
+            r.space();
+            bool is_list = false;
+            bool array_open = false;
+            if (r.p != r.end && *r.p == '[') {
+                ++r.p;
+                array_open = true;
+                r.space();
+                is_list = r.p != r.end && (*r.p == '{' || *r.p == ']');
+            }
+            if (!is_list) {
+                if (!r.value(*field, array_open))
+                    return hue::ErrorCode::kCorruptData;
+                ++out.root.count;
+                continue;
+            }
+            if (out.list_count == kDocumentMaxLists)
+                return hue::ErrorCode::kCorruptData;
+            auto& list = out.lists[out.list_count];
+            std::memcpy(list.key, field->key, sizeof(list.key));
+            list.count = 0;
+            if (!r.take(']')) {
+                do {
+                    if (list.count == kDocumentMaxRecords || !r.take('{'))
+                        return hue::ErrorCode::kCorruptData;
+                    auto& record = list.items[list.count];
+                    record.count = 0;
+                    if (!r.take('}')) {
+                        do {
+                            ConfigField* member = nullptr;
+                            if (!r.key(record.fields, record.count, kRecordMaxFields, member) ||
+                                !r.value(*member))
+                                return hue::ErrorCode::kCorruptData;
+                            ++record.count;
+                        } while (r.take(','));
+                        if (!r.take('}'))
+                            return hue::ErrorCode::kCorruptData;
+                    }
+                    ++list.count;
+                } while (r.take(','));
+                if (!r.take(']'))
+                    return hue::ErrorCode::kCorruptData;
+            }
+            ++out.list_count;
+        } while (r.take(','));
+        if (!r.take('}'))
+            return hue::ErrorCode::kCorruptData;
+    }
+    r.space();
+    if (r.p != r.end)
+        return hue::ErrorCode::kCorruptData;
+    return {};
 }

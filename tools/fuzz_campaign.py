@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-TARGETS = {"gltf": 1048576, "animation_events": 65537, "scene": 4097,
+TARGETS = {"gltf": 1048576, "animation_events": 65537, "scene": 16385,
            "tuning": 4097, "shader_contract": 131073}
 SOURCE = Path(__file__).resolve().parents[1]
 

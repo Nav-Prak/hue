@@ -234,7 +234,17 @@ void jolt_global_shutdown() noexcept {
 struct CharacterSlot {
     JPH::Ref<JPH::CharacterVirtual> character;
     JPH::Vec3 desired_velocity = JPH::Vec3::sZero();
+    bool enabled = true;
 };
+
+struct PropSlot {
+    JPH::BodyID body;
+    bool used = false;
+};
+
+[[nodiscard]] bool finite_vec3(Vec3 v) noexcept {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
 
 } // namespace
 
@@ -250,6 +260,8 @@ struct PhysicsWorld::State {
     CharacterSlot characters[kMaxPhysicsCharacters];
     std::uint32_t character_count = 0;
     std::uint32_t static_body_count = 0;
+    PropSlot props[kMaxProps];
+    std::uint32_t prop_count = 0;
 };
 
 Result<PhysicsWorld> PhysicsWorld::create() noexcept {
@@ -283,9 +295,11 @@ PhysicsWorld::~PhysicsWorld() {
     }
 }
 
-Result<void> PhysicsWorld::add_static_box(Vec3 center, Quat rotation,
-                                          Vec3 half_extents) noexcept {
-    if (m_state == nullptr || m_state->static_body_count >= kMaxStaticBodies) {
+namespace {
+[[nodiscard]] Result<JPH::BodyID> create_box_body(JPH::PhysicsSystem& system, Vec3 center,
+                                                  Quat rotation, Vec3 half_extents) noexcept {
+    if (!finite_vec3(center) || !finite_vec3(half_extents) || !std::isfinite(rotation.x) ||
+        !std::isfinite(rotation.y) || !std::isfinite(rotation.z) || !std::isfinite(rotation.w)) {
         return ErrorCode::kInvalidArgument;
     }
     if (half_extents.x <= 0.0f || half_extents.y <= 0.0f || half_extents.z <= 0.0f) {
@@ -309,13 +323,68 @@ Result<void> PhysicsWorld::add_static_box(Vec3 center, Quat rotation,
     JPH::BodyCreationSettings body_settings(shape.Get(), JPH::RVec3(to_jolt(center)),
                                             to_jolt(normalize(rotation)),
                                             JPH::EMotionType::Static, layers::kStatic);
-    JPH::BodyInterface& bodies = m_state->system.GetBodyInterface();
+    JPH::BodyInterface& bodies = system.GetBodyInterface();
     const JPH::BodyID body = bodies.CreateAndAddBody(body_settings, JPH::EActivation::DontActivate);
     if (body.IsInvalid()) {
         return ErrorCode::kOutOfMemory;
     }
+    return body;
+}
+} // namespace
+
+Result<void> PhysicsWorld::add_static_box(Vec3 center, Quat rotation,
+                                          Vec3 half_extents) noexcept {
+    if (m_state == nullptr || m_state->static_body_count >= kMaxStaticBodies) {
+        return ErrorCode::kInvalidArgument;
+    }
+    const auto body = create_box_body(m_state->system, center, rotation, half_extents);
+    if (!body) {
+        return body.error();
+    }
     ++m_state->static_body_count;
     return {};
+}
+
+Result<std::uint32_t> PhysicsWorld::create_prop_box(Vec3 center, Quat rotation,
+                                                    Vec3 half_extents) noexcept {
+    if (m_state == nullptr || m_state->static_body_count >= kMaxStaticBodies) {
+        return ErrorCode::kInvalidArgument;
+    }
+    std::uint32_t slot = kMaxProps;
+    for (std::uint32_t i = 0; i < kMaxProps; ++i) {
+        if (!m_state->props[i].used) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == kMaxProps) {
+        return ErrorCode::kOutOfMemory;
+    }
+    const auto body = create_box_body(m_state->system, center, rotation, half_extents);
+    if (!body) {
+        return body.error();
+    }
+    m_state->props[slot].body = body.value();
+    m_state->props[slot].used = true;
+    ++m_state->prop_count;
+    ++m_state->static_body_count;
+    return slot;
+}
+
+void PhysicsWorld::destroy_prop(std::uint32_t prop) noexcept {
+    if (m_state == nullptr || prop >= kMaxProps || !m_state->props[prop].used) {
+        return;
+    }
+    JPH::BodyInterface& bodies = m_state->system.GetBodyInterface();
+    bodies.RemoveBody(m_state->props[prop].body);
+    bodies.DestroyBody(m_state->props[prop].body);
+    m_state->props[prop] = PropSlot{};
+    --m_state->prop_count;
+    --m_state->static_body_count;
+}
+
+std::uint32_t PhysicsWorld::prop_count() const noexcept {
+    return m_state != nullptr ? m_state->prop_count : 0;
 }
 
 Result<void> PhysicsWorld::add_static_mesh(const Vec3* positions, std::size_t position_count,
@@ -394,6 +463,28 @@ Result<std::uint32_t> PhysicsWorld::create_character(const CharacterDesc& desc) 
     return id;
 }
 
+void PhysicsWorld::set_character_enabled(std::uint32_t character, bool enabled) noexcept {
+    if (m_state == nullptr || character >= m_state->character_count) {
+        return;
+    }
+    auto& slot = m_state->characters[character];
+    slot.enabled = enabled;
+    if (!enabled) {
+        slot.desired_velocity = JPH::Vec3::sZero();
+        slot.character->SetLinearVelocity(JPH::Vec3::sZero());
+    }
+}
+
+std::uint32_t PhysicsWorld::enabled_character_count() const noexcept {
+    std::uint32_t count = 0;
+    if (m_state != nullptr) {
+        for (std::uint32_t i = 0; i < m_state->character_count; ++i) {
+            count += m_state->characters[i].enabled ? 1u : 0u;
+        }
+    }
+    return count;
+}
+
 void PhysicsWorld::set_character_velocity(std::uint32_t character,
                                           Vec3 planar_velocity) noexcept {
     if (m_state == nullptr || character >= m_state->character_count) {
@@ -427,6 +518,9 @@ Result<void> PhysicsWorld::update(float delta_seconds) noexcept {
 
     for (std::uint32_t i = 0; i < m_state->character_count; ++i) {
         CharacterSlot& slot = m_state->characters[i];
+        if (!slot.enabled) {
+            continue;
+        }
         JPH::CharacterVirtual* character = slot.character.GetPtr();
 
         const bool grounded =

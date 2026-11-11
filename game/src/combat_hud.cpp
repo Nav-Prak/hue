@@ -138,12 +138,17 @@ void volumes(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& camera,
 } // namespace
 
 void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& camera,
-                       const Encounter& encounter, const CombatCharacter& player,
-                       const CombatCharacter& enemy, unsigned diagnostics, double frame_ms,
+                       const Encounter& encounter, unsigned diagnostics, double frame_ms,
                        std::size_t arena_peak, std::size_t entities, std::uint32_t bodies,
                        const char* reload_status, std::uint32_t viewport_width,
                        std::uint32_t viewport_height) {
     HUE_PROFILE_ZONE("game::combat_hud");
+    const std::uint32_t actor_count = encounter.actor_count();
+    if (actor_count < 2)
+        return; // no scene applied yet
+    const std::uint32_t focus = encounter.focus_enemy();
+    const CombatCharacter& player = encounter.actor(kPlayerSlot);
+    const CombatCharacter& enemy = encounter.actor(focus);
     const auto text = [viewport_width, viewport_height](hue::HudQuad* output, std::uint32_t& count,
                                                         float x, float y, const char* message,
                                                         float scale = 1.0f) {
@@ -151,14 +156,16 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
     };
     quad(q, n, {-0.98f, -0.98f}, {0.98f, -0.76f}, {0.02f, 0.025f, 0.04f, 0.88f});
     text(q, n, -0.94f, -0.80f, "WASD / LEFT STICK MOVE   SHIFT RUN   RMB / RIGHT STICK CAMERA");
-    text(q, n, -0.94f, -0.85f, "LMB / X LIGHT   E / Y HEAVY   SPACE / B DODGE   TAB / R3 LOCK");
+    text(q, n, -0.94f, -0.85f,
+         "LMB / X LIGHT   E / Y HEAVY   SPACE / B DODGE   TAB / R3 LOCK   Q / RB NEXT TARGET");
     text(q, n, -0.94f, -0.90f,
-         "ENTER / START BEGIN   R RESET   F2 / BACK DEBUG   F5 SCENE   F6 TUNING   ESC QUIT");
+         "ENTER / START BEGIN   R RESET   F2 / BACK DEBUG   F5 F6 F7 SCENE TUNING NEXT   M MUTE");
     char buffer[160];
-    std::snprintf(
-        buffer, sizeof(buffer), "%s   TIME %.1F   LOCK %s", encounter_state_name(encounter.state()),
-        static_cast<double>(encounter.stats().ticks) / 60.0, encounter.locked() ? "ON" : "OFF");
-    text(q, n, -0.42f, 0.78f, buffer);
+    std::snprintf(buffer, sizeof(buffer), "%s   TIME %.1F   LOCK %s   ENEMIES %u / %u",
+                  encounter_state_name(encounter.state()),
+                  static_cast<double>(encounter.stats().ticks) / 60.0,
+                  encounter.locked() ? "ON" : "OFF", encounter.enemies_alive(), actor_count - 1);
+    text(q, n, -0.55f, 0.78f, buffer);
     if (encounter.state() != EncounterState::kFighting) {
         quad(q, n, {-0.70f, 0.47f}, {0.70f, 0.72f}, {0.025f, 0.035f, 0.06f, 0.92f});
         text(q, n, -0.25f, 0.68f, encounter_state_name(encounter.state()), 2.0f);
@@ -189,16 +196,17 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
         text(q, n, -0.94f, 0.04f, "CPU ALLOCATIONS ONLY - NOT VRAM. F2 RETURNS TO GAME.", 0.9f);
         return;
     }
-    volumes(q, n, camera, player, encounter.model(0), player.hurtboxes(),
-            {0.1f, 0.9f, 0.4f, 0.85f});
-    volumes(q, n, camera, enemy, encounter.model(1), enemy.hurtboxes(), {0.1f, 0.7f, 1.0f, 0.85f});
-    const CombatCharacter* actors[2] = {&player, &enemy};
-    for (std::uint32_t i = 0; i < 2; ++i) {
-        const auto& actor = *actors[i];
+    for (std::uint32_t i = 0; i < actor_count; ++i) {
+        const auto& actor = encounter.actor(i);
+        volumes(q, n, camera, actor, encounter.model(i), actor.hurtboxes(),
+                i == kPlayerSlot ? hue::Vec4{0.1f, 0.9f, 0.4f, 0.85f}
+                                 : hue::Vec4{0.1f, 0.7f, 1.0f, 0.85f});
         volumes(q, n, camera, actor, encounter.model(i), actor.hitboxes(),
                 actor.hitbox_active() ? hue::Vec4{1.0f, 0.15f, 0.1f, 1.0f}
                                       : hue::Vec4{0.6f, 0.6f, 0.6f, 0.6f});
     }
+    // Text rows describe the player and the focused enemy (lock target or nearest).
+    const CombatCharacter* actors[2] = {&player, &enemy};
     quad(q, n, {-0.98f, 0.12f}, {0.95f, 0.71f}, {0.02f, 0.025f, 0.04f, 0.9f});
     for (std::uint32_t i = 0; i < 2; ++i) {
         const auto& a = *actors[i];
@@ -211,8 +219,8 @@ void append_combat_hud(hue::HudQuad* q, std::uint32_t& n, const hue::Camera& cam
                       static_cast<double>(a.buffer_remaining()));
         text(q, n, -0.94f, 0.67f - static_cast<float>(i) * 0.05f, buffer);
     }
-    std::snprintf(buffer, sizeof(buffer), "AI %s   HITS %u / %u   DODGES %u   HITSTOP %.3F",
-                  hue::combat::ai_state_name(encounter.ai_state()), encounter.stats().hits[0],
+    std::snprintf(buffer, sizeof(buffer), "ENEMY %u AI %s   HITS %u / %u   DODGES %u   HITSTOP %.3F",
+                  focus, hue::combat::ai_state_name(encounter.ai_state()), encounter.stats().hits[0],
                   encounter.stats().hits[1], encounter.stats().dodges,
                   static_cast<double>(encounter.hitstop()));
     text(q, n, -0.94f, 0.57f, buffer);

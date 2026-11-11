@@ -10,6 +10,7 @@ import json
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 CONNECT_TIMEOUT_S = 20.0
@@ -24,12 +25,15 @@ def free_port():
         return sock.getsockname()[1]
 
 
+GAME_LOG = None
+
+
 def fail(proc, message):
     proc.kill()
-    out, err = proc.communicate(timeout=10)
+    proc.wait(timeout=10)
     print(f"FAIL: {message}", file=sys.stderr)
-    print(f"game stdout:\n{out.decode(errors='replace')}", file=sys.stderr)
-    print(f"game stderr:\n{err.decode(errors='replace')}", file=sys.stderr)
+    GAME_LOG.seek(0)
+    print(f"game output:\n{GAME_LOG.read().decode(errors='replace')}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -63,10 +67,14 @@ def main():
     # No --frames cap: with no renderer the loop spins at thousands of fps
     # and any cap is gone before we can connect. Lifetime is controlled by
     # the quit command; every failure path kills the process.
+    # Output goes to a file, never an unread pipe: once a pipe buffer (4 KiB on
+    # Windows) fills, the game blocks inside its own logging and cannot quit.
+    global GAME_LOG
+    GAME_LOG = tempfile.TemporaryFile()
     proc = subprocess.Popen(
         [game, "--debug-channel", str(port)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=GAME_LOG,
+        stderr=GAME_LOG,
     )
     try:
         run_checks(proc, port)

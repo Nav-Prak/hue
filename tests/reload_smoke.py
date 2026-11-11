@@ -65,7 +65,7 @@ def main():
                     assert command(sock,"fight.status")["data"]["revision"] == 2
                     scene_path = root / "assets/config/arena.json"
                     scene = json.loads(scene_path.read_text())
-                    scene["player_spawn"][0] = -2
+                    scene["actors"][0]["position"][0] = -2
                     scene_path.write_text(json.dumps(scene))
                     assert command(sock,"scene.reload")["ok"]
                     scene_path.write_text('{}')
@@ -73,6 +73,27 @@ def main():
                     assert command(sock,"fight.reset")["ok"]
                     time.sleep(0.05)
                     assert command(sock,"fight.status")["data"]["player_x"] == -2
+                    scene_path.write_text(json.dumps(scene)) # restore a valid file
+                    # Scene switching by approved name: four actors and four props
+                    # replace two and none, then the original scene comes back.
+                    for bad in ("../arena", "arena.json", "no_such_scene", "a b"):
+                        assert not command(sock,"scene.load " + bad)["ok"], bad
+                    assert not command(sock,"scene.load")["ok"]
+                    for cycle in range(3):
+                        assert command(sock,"scene.load gauntlet")["ok"]
+                        staged = command(sock,"fight.status")["data"]
+                        assert staged["scene_pending"] and staged["actors"] == 2, staged
+                        assert command(sock,"fight.reset")["ok"]
+                        time.sleep(0.05)
+                        applied = command(sock,"fight.status")["data"]
+                        assert (applied["actors"], applied["enemies_alive"], applied["props"]) == (4, 3, 4), applied
+                        assert command(sock,"fight.start")["ok"]
+                        time.sleep(0.2)
+                        assert command(sock,"scene.load arena")["ok"]
+                        assert command(sock,"fight.reset")["ok"]
+                        time.sleep(0.05)
+                        applied = command(sock,"fight.status")["data"]
+                        assert (applied["actors"], applied["props"]) == (2, 0), applied
                     render = command(sock,"render.status")
                     if render["ok"]:
                         target = root / "shaders/mesh.vert.spv"

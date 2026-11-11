@@ -17,6 +17,7 @@ namespace hue::physics {
 
 inline constexpr std::uint32_t kMaxPhysicsCharacters = 8;
 inline constexpr std::uint32_t kMaxStaticBodies = 128;
+inline constexpr std::uint32_t kMaxProps = 32; // removable static boxes (scene props)
 inline constexpr std::size_t kMaxCookedVertices = 1u << 20;
 inline constexpr std::size_t kMaxCookedIndices = 3u << 20;
 inline constexpr float kMaxCombatShapeExtent = 8.0f;
@@ -57,7 +58,19 @@ public:
                                                const std::uint32_t* indices,
                                                std::size_t index_count) noexcept;
 
+    // Scene props: static boxes that can be removed again when a scene is
+    // replaced. Handles are slot indices below kMaxProps; a stale or unknown
+    // handle is ignored by destroy_prop.
+    [[nodiscard]] Result<std::uint32_t> create_prop_box(Vec3 center, Quat rotation,
+                                                        Vec3 half_extents) noexcept;
+    void destroy_prop(std::uint32_t prop) noexcept;
+    [[nodiscard]] std::uint32_t prop_count() const noexcept;
+
     [[nodiscard]] Result<std::uint32_t> create_character(const CharacterDesc& desc) noexcept;
+    // Controllers are never destroyed; a disabled one is skipped by update so
+    // a scene with fewer actors leaves the spare capsules parked.
+    void set_character_enabled(std::uint32_t character, bool enabled) noexcept;
+    [[nodiscard]] std::uint32_t enabled_character_count() const noexcept;
 
     // Desired planar velocity for the next update; gravity is engine-managed.
     void set_character_velocity(std::uint32_t character, Vec3 planar_velocity) noexcept;

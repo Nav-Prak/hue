@@ -12,3 +12,5 @@
 
 [[nodiscard]] hue::Result<hue::asset::StaticMeshData> build_ground_scene();
 [[nodiscard]] hue::Result<hue::asset::StaticMeshData> build_gltf_cube();
+// Unit cube with a neutral rough material; scene props scale and tint it.
+[[nodiscard]] hue::Result<hue::asset::StaticMeshData> build_prop_cube();

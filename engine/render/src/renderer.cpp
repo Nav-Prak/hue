@@ -411,7 +411,10 @@ void state_destroy(Renderer::State& state) {
 
                 MeshPushConstants push;
                 push.model = draws[d].transform * instance.transform;
-                push.base_color = material->base_color_factor;
+                push.base_color = {material->base_color_factor.x * draws[d].tint.x,
+                                   material->base_color_factor.y * draws[d].tint.y,
+                                   material->base_color_factor.z * draws[d].tint.z,
+                                   material->base_color_factor.w * draws[d].tint.w};
                 push.metallic_roughness = {material->metallic_factor,
                                            material->roughness_factor, 0.0f, 0.0f};
                 push.skin_offset = skin_offset;

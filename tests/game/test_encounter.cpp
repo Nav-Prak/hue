@@ -32,34 +32,55 @@ struct Fixture {
     hue::Result<hue::physics::PhysicsWorld> physics = hue::physics::PhysicsWorld::create();
     hue::Result<hue::LinearArena> arena =
         hue::LinearArena::create(256 * 1024, hue::MemoryTag::kAnimation);
-    std::optional<CombatCharacter> actors[2];
-    hue::MeshDraw draws[2];
+    std::optional<RigAsset> rig_storage[kRigCount];
+    const RigAsset* rigs[kRigCount]{};
+    std::optional<ActorRoster> roster;
+    // Refreshed after every reset: a scene change can replace a slot's character.
+    CombatCharacter* actors[kMaxActors]{};
+    hue::MeshDraw draws[kMaxActors];
     FollowCamera camera;
     std::optional<Encounter> session;
     Fixture() {
         REQUIRE(physics);
         REQUIRE(arena);
         REQUIRE(physics.value().add_static_box({0, -0.5f, 0}, {}, {30, 0.5f, 30}));
-        const char* meshes[2] = {"player.glb", "enemy.glb"};
-        const char* events[2] = {"player.events.json", "enemy.events.json"};
-        for (std::uint32_t i = 0; i < 2; ++i) {
+        const char* meshes[kRigCount] = {"player.glb", "enemy.glb"};
+        const char* events[kRigCount] = {"player.events.json", "enemy.events.json"};
+        for (unsigned i = 0; i < kRigCount; ++i) {
             const auto bytes = model_bytes(meshes[i]);
             auto mesh = hue::asset::load_gltf_skinned(bytes.data(), bytes.size());
             const auto event_bytes = model_bytes(events[i]);
             auto track = hue::anim::parse_animation_events(event_bytes.data(), event_bytes.size());
             REQUIRE(mesh);
             REQUIRE(track);
-            actors[i].emplace(std::move(mesh.value()), std::move(track.value()), hue::MeshHandle{},
-                              i);
-            REQUIRE(actors[i]->initialize());
-            hue::physics::CharacterDesc desc;
-            desc.position = kEncounterSpawns[i];
-            REQUIRE(physics.value().create_character(desc));
+            rig_storage[i].emplace(
+                RigAsset{std::move(mesh.value()), std::move(track.value()), hue::MeshHandle{}});
+            rigs[i] = &*rig_storage[i];
         }
-        session.emplace(physics.value(), *actors[0], *actors[1], 0, 1, camera);
+        roster.emplace(physics.value(), rigs);
+        REQUIRE(roster->initialize());
+        session.emplace(physics.value(), *roster, camera);
         reset();
     }
-    void reset() { REQUIRE(session->reset(arena.value(), draws)); }
+    void reset() {
+        REQUIRE(session->reset(arena.value(), draws));
+        for (std::uint32_t i = 0; i < kMaxActors; ++i)
+            actors[i] = i < session->actor_count() ? &session->actor(i) : nullptr;
+    }
+    // Player plus up to seven barbarians on clear ground east of the default spawn.
+    [[nodiscard]] static SceneConfig crowd(unsigned enemies) {
+        static constexpr float kSpots[7][2] = {{0.8f, 3.0f}, {0.8f, 4.3f}, {2.1f, 3.0f},
+                                               {2.1f, 4.3f}, {3.4f, 3.0f}, {0.8f, 7.6f},
+                                               {2.1f, 7.6f}};
+        SceneConfig scene;
+        scene.actor_count = 1 + enemies;
+        for (unsigned e = 0; e < enemies && e < 7; ++e)
+            scene.actors[1 + e] = {RigId::kBarbarian,
+                                   {kSpots[e][0], kSceneGroundY, kSpots[e][1]},
+                                   hue::kPi * 0.5f};
+        REQUIRE(valid_scene(scene));
+        return scene;
+    }
     void tick(hue::Vec3 move = {}) {
         arena.value().reset();
         REQUIRE(session->tick(move, arena.value(), draws));
@@ -274,7 +295,7 @@ TEST_CASE("combat character: sub-tick hit window remains observable with owned m
         R"({"events":[{"clip":"attack","time":0.001,"name":"hit_begin"},{"clip":"attack","time":0.002,"name":"hit_end"}]})";
     auto track = hue::anim::parse_animation_events(events, sizeof(events) - 1);
     REQUIRE(track);
-    CombatCharacter actor(std::move(mesh.value()), std::move(track.value()), {}, 0);
+    CombatCharacter actor(mesh.value(), track.value(), {}, 0);
     REQUIRE(actor.initialize());
     auto arena = hue::LinearArena::create(65536, hue::MemoryTag::kAnimation);
     REQUIRE(arena);
@@ -298,8 +319,8 @@ TEST_CASE("encounter HUD: bitmap glyphs align to framebuffer pixels at multiple 
                             {800, 600}, {1920, 1080}, {3440, 1440}, {3840, 2160}}) {
         for (unsigned page : {0u, 1u, 2u}) {
             std::uint32_t count = 0;
-            append_combat_hud(quads.data(), count, {}, *f.session, *f.actors[0], *f.actors[1], page,
-                              16.6, 16384, 2, 2, nullptr, size[0], size[1]);
+            append_combat_hud(quads.data(), count, {}, *f.session, page, 16.6, 16384, 2, 2,
+                              nullptr, size[0], size[1]);
             REQUIRE(count < hue::kMaxHudQuads);
             unsigned glyph_quads = 0;
             for (std::uint32_t i = 0; i < count; ++i) {
@@ -327,8 +348,8 @@ TEST_CASE("encounter HUD: bounded finite quads with diagnostics and capacity exh
     std::vector<hue::HudQuad> quads(hue::kMaxHudQuads + 1);
     quads.back().ndc_min.x = 1234.0f;
     std::uint32_t count = 0;
-    append_combat_hud(quads.data(), count, f.camera.camera(16.0f / 9.0f), *f.session, *f.actors[0],
-                      *f.actors[1], true, 16.6, 16384, 2, 2);
+    append_combat_hud(quads.data(), count, f.camera.camera(16.0f / 9.0f), *f.session, true, 16.6,
+                      16384, 2, 2);
     CHECK(count > 0);
     CHECK(count < hue::kMaxHudQuads);
     for (std::uint32_t i = 0; i < count; ++i) {
@@ -336,13 +357,18 @@ TEST_CASE("encounter HUD: bounded finite quads with diagnostics and capacity exh
         CHECK(std::isfinite(quads[i].skew.y));
     }
     count = hue::kMaxHudQuads;
-    append_combat_hud(quads.data(), count, {}, *f.session, *f.actors[0], *f.actors[1], true, 0, 0,
-                      2, 2);
+    append_combat_hud(quads.data(), count, {}, *f.session, true, 0, 0, 2, 2);
     CHECK(count == hue::kMaxHudQuads);
     CHECK(quads.back().ndc_min.x == 1234.0f);
     count = 0;
-    append_combat_hud(quads.data(), count, {}, *f.session, *f.actors[0], *f.actors[1], 2, 16.6,
-                      16384, 2, 2);
+    append_combat_hud(quads.data(), count, {}, *f.session, 2, 16.6, 16384, 2, 2);
+    CHECK(count < hue::kMaxHudQuads);
+    // Diagnostics for a full eight-actor scene must still fit the quad budget.
+    REQUIRE(f.session->stage_scene(Fixture::crowd(7)));
+    f.reset();
+    count = 0;
+    append_combat_hud(quads.data(), count, f.camera.camera(16.0f / 9.0f), *f.session, 1, 16.6,
+                      16384, 8, 8);
     CHECK(count < hue::kMaxHudQuads);
 }
 
@@ -352,13 +378,13 @@ TEST_CASE("encounter: scene staging preserves live state and rejects invalid can
     f.tick();
     const auto before = f.session->position(0);
     SceneConfig candidate;
-    candidate.spawns[0] = {-2, 0.05f, 3};
+    candidate.actors[0].position = {-2, 0.05f, 3};
     REQUIRE(f.session->stage_scene(candidate));
     CHECK(f.session->scene_pending());
     CHECK(f.session->position(0).x == before.x);
-    candidate.spawns[0] = {0, 0, 0};
+    candidate.actors[0].position = {0, 0, 0};
     CHECK_FALSE(f.session->stage_scene(candidate));
-    CHECK(f.session->scene().spawns[0].x == doctest::Approx(-0.8));
+    CHECK(f.session->scene().actors[0].position.x == doctest::Approx(-0.8));
     for (int i = 0; i < 20; ++i) {
         f.reset();
         CHECK(f.session->position(0).x == -2.0f);
@@ -412,4 +438,152 @@ TEST_CASE("encounter: tuning commits on reset without altering active event trac
             f.tick();
         CHECK_FALSE(f.actors[0]->cancel_open());
     }
+}
+
+TEST_CASE("encounter: several enemies must all fall, and the lock follows the living") {
+    Fixture f;
+    REQUIRE(f.session->stage_scene(Fixture::crowd(3)));
+    f.reset();
+    REQUIRE(f.session->actor_count() == 4);
+    CHECK(f.physics.value().enabled_character_count() == 4);
+    CHECK(f.session->enemies_alive() == 3);
+    f.session->start();
+    f.session->toggle_lock();
+    f.tick();
+    CHECK(f.session->lock_target() == 1); // nearest
+    f.session->cycle_lock();
+    f.tick();
+    CHECK(f.session->lock_target() == 2);
+    CHECK(f.session->focus_enemy() == 2);
+    f.actors[2]->apply_damage(1000);
+    f.tick();
+    f.tick();
+    CHECK(f.session->state() == EncounterState::kFighting);
+    CHECK(f.session->enemies_alive() == 2);
+    CHECK(f.session->locked());
+    CHECK(f.session->lock_target() != 2); // moved to a living enemy
+    f.actors[1]->apply_damage(1000);
+    f.tick();
+    CHECK(f.session->state() == EncounterState::kFighting);
+    f.actors[3]->apply_damage(1000);
+    f.tick();
+    CHECK(f.session->state() == EncounterState::kWon);
+    CHECK_FALSE(f.session->locked());
+    // Cycling with nothing alive or after the result must not acquire.
+    f.session->cycle_lock();
+    f.tick();
+    CHECK_FALSE(f.session->locked());
+}
+
+TEST_CASE("encounter: a crowd fight ends through real contact and never double-counts a swing") {
+    Fixture f;
+    REQUIRE(f.session->stage_scene(Fixture::crowd(3)));
+    for (unsigned fight = 0; fight < 3; ++fight) {
+        f.reset();
+        f.session->start();
+        f.session->toggle_lock();
+        std::uint64_t last_activation = 0;
+        std::uint32_t hits_this_swing = 0;
+        for (unsigned tick = 0; tick < 5400 && f.session->state() == EncounterState::kFighting;
+             ++tick) {
+            if (fight % 2 == 0)
+                f.session->buffer(hue::combat::Action::kAttackHeavy);
+            const auto before = f.session->stats().hits[0];
+            f.tick();
+            if (f.actors[0]->activation() != last_activation) {
+                last_activation = f.actors[0]->activation();
+                hits_this_swing = 0;
+            }
+            hits_this_swing += f.session->stats().hits[0] - before;
+            // One swing can hit each enemy at most once.
+            CHECK(hits_this_swing <= 3);
+        }
+        REQUIRE(f.session->state() != EncounterState::kFighting);
+        CHECK(f.session->stats().hits[0] + f.session->stats().hits[1] > 0);
+        // Crowding enemies steer apart rather than stacking on one point.
+        for (std::uint32_t a = 1; a < 4; ++a)
+            for (std::uint32_t b = a + 1; b < 4; ++b)
+                if (f.actors[a]->alive() && f.actors[b]->alive())
+                    CHECK(hue::length(f.session->position(a) - f.session->position(b)) > 0.3f);
+    }
+}
+
+TEST_CASE("encounter: scene changes reuse actors, controllers and props without growth") {
+    Fixture f;
+    SceneConfig big = Fixture::crowd(7);
+    big.actors[3].rig = RigId::kKnight; // an enemy may use any approved rig
+    big.prop_count = 2;
+    big.props[0] = {{6.0f, 0.5f, 9.0f}, {0.5f, 0.5f, 0.5f}, 0.3f, {0.8f, 0.2f, 0.2f}};
+    big.props[1] = {{-6.0f, 1.0f, 9.0f}, {1.0f, 1.0f, 0.25f}, 0.0f, {0.2f, 0.2f, 0.8f}};
+    const SceneConfig small{};
+    hue::AllocationSnapshot warmed{};
+    for (int cycle = 0; cycle < 12; ++cycle) {
+        const bool use_big = cycle % 2 == 0;
+        REQUIRE(f.session->stage_scene(use_big ? big : small));
+        f.reset();
+        const std::uint32_t expected = use_big ? 8u : 2u;
+        CHECK(f.session->actor_count() == expected);
+        CHECK(f.physics.value().enabled_character_count() == expected);
+        CHECK(f.physics.value().character_count() == 8); // parked, never destroyed
+        CHECK(f.physics.value().prop_count() == (use_big ? 2u : 0u));
+        CHECK(f.physics.value().static_body_count() == (use_big ? 3u : 1u));
+        CHECK(f.session->scene_revision() == static_cast<std::uint32_t>(cycle + 2)); // fixture applied 1
+        if (use_big) {
+            // The prop is real collision: a ray straight down lands on its top.
+            const auto hit = f.physics.value().cast_ray({6.0f, 5.0f, 9.0f}, {0, -1, 0}, 10.0f);
+            REQUIRE(hit.hit);
+            CHECK(hit.position.y == doctest::Approx(1.0f).epsilon(0.02));
+        }
+        f.session->start();
+        for (int i = 0; i < 30; ++i)
+            f.tick();
+        const auto current = hue::allocation_snapshot();
+        if (cycle == 3)
+            warmed = current;
+        if (cycle > 3 && cycle % 2 == 1) {
+            for (const auto tag : {hue::MemoryTag::kAnimation, hue::MemoryTag::kAssets,
+                                   hue::MemoryTag::kPhysics, hue::MemoryTag::kGame}) {
+                const auto index = static_cast<std::size_t>(tag);
+                CHECK(current.tags[index].current_bytes == warmed.tags[index].current_bytes);
+                CHECK(current.tags[index].live_allocations == warmed.tags[index].live_allocations);
+            }
+        }
+    }
+}
+
+TEST_CASE("encounter: presentation events are bounded and describe the fight") {
+    Fixture f;
+    EncounterEvent events[kMaxEncounterEvents];
+    CHECK(f.session->drain_events(events, kMaxEncounterEvents) == 0);
+    f.session->start();
+    REQUIRE(f.session->drain_events(events, kMaxEncounterEvents) == 1);
+    CHECK(events[0].type == EncounterEventType::kFightStart);
+    f.session->buffer(hue::combat::Action::kAttackHeavy);
+    bool swing = false, hit = false;
+    for (int i = 0; i < 120; ++i) {
+        f.tick();
+        const auto count = f.session->drain_events(events, kMaxEncounterEvents);
+        for (std::uint32_t e = 0; e < count; ++e) {
+            swing = swing || (events[e].type == EncounterEventType::kSwingHeavy && events[e].actor == 0);
+            hit = hit || (events[e].type == EncounterEventType::kHitHeavy && events[e].actor == 1);
+            CHECK(std::isfinite(events[e].position.x));
+        }
+    }
+    CHECK(swing);
+    CHECK(hit);
+    // Never drained: the queue saturates instead of growing or overwriting memory.
+    f.reset();
+    f.session->start();
+    for (int i = 0; i < 600; ++i) {
+        f.session->toggle_lock();
+        f.tick();
+    }
+    CHECK(f.session->drain_events(events, kMaxEncounterEvents) == kMaxEncounterEvents);
+    CHECK(f.session->drain_events(events, kMaxEncounterEvents) == 0);
+    CHECK(f.session->drain_events(nullptr, 4) == 0);
+    f.actors[1]->apply_damage(1000);
+    f.tick();
+    const auto count = f.session->drain_events(events, kMaxEncounterEvents);
+    REQUIRE(count > 0);
+    CHECK(events[count - 1].type == EncounterEventType::kVictory);
 }

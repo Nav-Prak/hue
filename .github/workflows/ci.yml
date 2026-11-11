@@ -123,7 +123,7 @@ jobs:
         run: >
           mkdir -p artifacts &&
           ./build/linux-clang-sanitized/tools/fuzz/fuzz_scene
-          tools/fuzz/corpus/scene -max_total_time=60 -max_len=4097
+          tools/fuzz/corpus/scene -max_total_time=60 -max_len=16385
           -timeout=10 -rss_limit_mb=2048 -artifact_prefix=artifacts/
       - name: Fuzz tuning (60s)
         run: ./build/linux-clang-sanitized/tools/fuzz/fuzz_tuning tools/fuzz/corpus/tuning -max_total_time=60 -max_len=4097 -timeout=10 -artifact_prefix=artifacts/

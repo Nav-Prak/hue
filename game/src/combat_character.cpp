@@ -48,8 +48,12 @@ namespace {
 } // namespace
 
 hue::Result<void> CombatCharacter::initialize() {
-    if (m_events.events.size() > hue::anim::kMaxAnimationEvents)
+    if (m_source_events.events.size() > hue::anim::kMaxAnimationEvents)
         return hue::ErrorCode::kCorruptData;
+    m_events.events.clear();
+    for (std::size_t i = 0; i < m_source_events.events.size(); ++i)
+        if (!m_events.events.push_back(m_source_events.events[i]))
+            return hue::ErrorCode::kOutOfMemory;
     for (std::size_t i = 0; i < m_events.events.size(); ++i)
         m_original_event_times[i] = m_events.events[i].time;
     const auto valid = hue::anim::validate_animation_events(m_data, m_events);

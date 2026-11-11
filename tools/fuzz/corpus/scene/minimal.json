@@ -1,0 +1,1 @@
+{"version":2,"arena":"training_arena","sun_direction":[0,-1,0],"sun_color":[1,1,1,1],"ambient":[0,0,0],"shadows":0,"actors":[{"rig":"kaykit_knight","role":"player","position":[-9,0.05,9],"yaw":0},{"rig":"kaykit_knight","role":"enemy","position":[9,0.05,9],"yaw":0}],"props":[],"lights":[]}

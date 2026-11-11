@@ -1,5 +1,6 @@
 // game/src/runtime_files.cpp
 #include "runtime_files.h"
+#include "scene_config.h"
 #include <cstdio>
 #include <cstring>
 #if defined(_WIN32)
@@ -32,17 +33,39 @@ bool runtime_path(char* out, std::size_t capacity, const char* suffix) noexcept 
     const int written = std::snprintf(out + used, capacity - used, "%s", suffix);
     return written >= 0 && static_cast<std::size_t>(written) < capacity - used;
 }
-hue::Result<ConfigBytes> read_config_file(const char* path) {
-    if (!path)
+hue::Result<std::size_t> read_bounded_file(const char* path, char* buffer, std::size_t capacity) {
+    if (!path || !buffer || capacity == 0)
         return hue::ErrorCode::kInvalidArgument;
     auto* file = std::fopen(path, "rb");
     if (!file)
         return hue::ErrorCode::kNotFound;
-    ConfigBytes result;
-    result.size = std::fread(result.data, 1, sizeof(result.data), file);
+    const std::size_t size = std::fread(buffer, 1, capacity, file);
     const bool bad = std::ferror(file) != 0 || std::fgetc(file) != EOF;
     const int closed = std::fclose(file);
-    if (bad || closed || result.size == 0)
+    if (bad || closed || size == 0)
         return hue::ErrorCode::kCorruptData;
+    return size;
+}
+hue::Result<ConfigBytes> read_config_file(const char* path) {
+    ConfigBytes result;
+    const auto size = read_bounded_file(path, result.data, sizeof(result.data));
+    if (!size)
+        return size.error();
+    result.size = size.value();
+    return result;
+}
+hue::Result<SceneBytes> read_scene_file(const char* scene_name) {
+    if (!valid_scene_name(scene_name))
+        return hue::ErrorCode::kInvalidArgument;
+    char relative[64];
+    std::snprintf(relative, sizeof(relative), "assets/config/%s.json", scene_name);
+    char path[1024];
+    if (!runtime_path(path, sizeof(path), relative))
+        return hue::ErrorCode::kInvalidArgument;
+    SceneBytes result;
+    const auto size = read_bounded_file(path, result.data, sizeof(result.data));
+    if (!size)
+        return size.error();
+    result.size = size.value();
     return result;
 }

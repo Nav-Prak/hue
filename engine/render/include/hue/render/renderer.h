@@ -47,6 +47,9 @@ struct MeshDraw {
     // palette is copied into the renderer's per-frame GPU buffer before draw.
     const Mat4* joint_matrices = nullptr;
     std::uint32_t joint_count = 0;
+    // Multiplies every material's base color for this instance (scene props
+    // share one mesh and differ only by tint).
+    Vec4 tint{1.0f, 1.0f, 1.0f, 1.0f};
 };
 
 // Local light sources for the PBR pass (Week 6 spec: one directional +

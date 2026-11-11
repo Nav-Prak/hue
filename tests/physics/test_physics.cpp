@@ -2,6 +2,8 @@
 
 #include "hue/physics/physics.h"
 
+#include <limits>
+
 namespace {
 
 constexpr float kTick = 1.0f / 60.0f;
@@ -171,4 +173,70 @@ TEST_CASE("physics: combat capsule and sphere overlap queries") {
 
     CHECK_FALSE(world.value().overlap_spheres({0.0f, 0.0f, 0.0f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.2f));
     CHECK_FALSE(world.value().overlap_capsules(identity, 0.2f, 99.0f, identity, 0.2f, 0.2f));
+}
+
+TEST_CASE("physics: scene props are real collision and can be removed and reused") {
+    auto physics = hue::physics::PhysicsWorld::create();
+    REQUIRE(physics);
+    auto& world = physics.value();
+    CHECK(world.prop_count() == 0);
+    for (int cycle = 0; cycle < 4; ++cycle) {
+        std::uint32_t handles[hue::physics::kMaxProps];
+        for (std::uint32_t i = 0; i < hue::physics::kMaxProps; ++i) {
+            auto prop = world.create_prop_box({static_cast<float>(i) * 3.0f, 0.5f, 0.0f}, {},
+                                              {0.5f, 0.5f, 0.5f});
+            REQUIRE(prop);
+            handles[i] = prop.value();
+        }
+        CHECK(world.prop_count() == hue::physics::kMaxProps);
+        CHECK(world.static_body_count() == hue::physics::kMaxProps);
+        CHECK_FALSE(world.create_prop_box({0, 5, 0}, {}, {0.5f, 0.5f, 0.5f})); // slots exhausted
+        CHECK(world.cast_ray({3.0f, 5.0f, 0.0f}, {0, -1, 0}, 10.0f).hit);
+        world.destroy_prop(handles[1]);
+        world.destroy_prop(handles[1]); // stale handle is ignored
+        world.destroy_prop(hue::physics::kMaxProps + 7);
+        CHECK(world.prop_count() == hue::physics::kMaxProps - 1);
+        CHECK_FALSE(world.cast_ray({3.0f, 5.0f, 0.0f}, {0, -1, 0}, 10.0f).hit);
+        for (std::uint32_t i = 0; i < hue::physics::kMaxProps; ++i)
+            world.destroy_prop(handles[i]);
+        CHECK(world.prop_count() == 0);
+        CHECK(world.static_body_count() == 0);
+    }
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(world.create_prop_box({nan, 0, 0}, {}, {0.5f, 0.5f, 0.5f}));
+    CHECK_FALSE(world.create_prop_box({0, 0, 0}, {}, {0.5f, nan, 0.5f}));
+    CHECK_FALSE(world.create_prop_box({0, 0, 0}, {}, {0.5f, 0.0f, 0.5f}));
+    CHECK(world.prop_count() == 0);
+}
+
+TEST_CASE("physics: a disabled controller is parked and skipped by the step") {
+    auto physics = hue::physics::PhysicsWorld::create();
+    REQUIRE(physics);
+    auto& world = physics.value();
+    REQUIRE(world.add_static_box({0, -0.5f, 0}, {}, {30, 0.5f, 30}));
+    hue::physics::CharacterDesc desc;
+    desc.position = {0, 0.05f, 0};
+    const auto a = world.create_character(desc);
+    desc.position = {3, 0.05f, 0};
+    const auto b = world.create_character(desc);
+    REQUIRE(a);
+    REQUIRE(b);
+    CHECK(world.enabled_character_count() == 2);
+    world.set_character_enabled(b.value(), false);
+    world.set_character_enabled(99, false); // unknown id is ignored
+    CHECK(world.enabled_character_count() == 1);
+    CHECK(world.character_count() == 2);
+    world.set_character_velocity(a.value(), {2, 0, 0});
+    world.set_character_velocity(b.value(), {2, 0, 0});
+    const auto parked = world.character_position(b.value());
+    for (int i = 0; i < 60; ++i)
+        REQUIRE(world.update(1.0f / 60.0f));
+    CHECK(world.character_position(a.value()).x > 1.5f);
+    CHECK(world.character_position(b.value()).x == parked.x);
+    world.set_character_enabled(b.value(), true);
+    REQUIRE(world.reset_character(b.value(), {3, 0.05f, 0}));
+    world.set_character_velocity(b.value(), {2, 0, 0});
+    for (int i = 0; i < 60; ++i)
+        REQUIRE(world.update(1.0f / 60.0f));
+    CHECK(world.character_position(b.value()).x > 4.5f);
 }

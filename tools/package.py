@@ -21,7 +21,7 @@ ACCEPTANCE = {
 }
 REQUIRED = {"assets/models/player.glb", "assets/models/enemy.glb",
     "assets/models/player.events.json", "assets/models/enemy.events.json",
-    "assets/models/LICENSE-KayKit.txt", "assets/config/arena.json", "assets/config/tuning.json",
+    "assets/models/LICENSE-KayKit.txt", "assets/config/arena.json", "assets/config/gauntlet.json", "assets/config/tuning.json",
     "README.txt", "third-party-notices.txt", "licenses/spirv-tools/LICENSE",
     "licenses/tracy/LICENSE", "licenses/tracy/libbacktrace/LICENSE",
     "licenses/glfw/LICENSE.md", "licenses/cgltf/LICENSE", "licenses/stb/LICENSE",

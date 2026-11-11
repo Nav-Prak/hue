@@ -213,6 +213,34 @@ hue::Result<StaticMeshData> build_ground_scene() {
     return data;
 }
 
+hue::Result<StaticMeshData> build_prop_cube() {
+    StaticMeshData data;
+    std::uint32_t first_index = 0;
+    std::uint32_t first_vertex = 0;
+    hue::asset::MaterialData material;
+    material.metallic_factor = 0.0f;
+    material.roughness_factor = 0.8f;
+    if (!data.materials.push_back(material)) {
+        return hue::ErrorCode::kOutOfMemory;
+    }
+    auto step = append_cube_faces(data, 1.0f);
+    if (!step) {
+        return step.error();
+    }
+    step = close_primitive(data, first_index, first_vertex, 0);
+    if (!step) {
+        return step.error();
+    }
+    MeshInstance instance;
+    instance.primitive_index = 0;
+    instance.transform = Mat4::identity();
+    if (!data.instances.push_back(instance)) {
+        return hue::ErrorCode::kOutOfMemory;
+    }
+    data.bounds = hue::Aabb{{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}};
+    return data;
+}
+
 // ---------------------------------------------------------------- glTF cube
 //
 // Builds a complete GLB (JSON chunk + BIN chunk) for the same unit cube and

@@ -5,8 +5,7 @@
 #include "encounter.h"
 
 void append_combat_hud(hue::HudQuad* quads, std::uint32_t& count, const hue::Camera& camera,
-                       const Encounter& encounter, const CombatCharacter& player,
-                       const CombatCharacter& enemy, unsigned diagnostics, double frame_ms,
+                       const Encounter& encounter, unsigned diagnostics, double frame_ms,
                        std::size_t arena_peak, std::size_t entities, std::uint32_t bodies,
                        const char* reload_status = nullptr, std::uint32_t viewport_width = 1280,
                        std::uint32_t viewport_height = 720);
