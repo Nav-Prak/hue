@@ -141,11 +141,44 @@ Verification: Windows Release 182/182 CTest tests (110.39 s); Windows ASan 181/1
 (160.77 s). Logs:
 `build/final-release-ctest.log` and `build/final-asan-ctest.log`. The Release
 run includes the silent audio-device smoke on this machine's real output; that
-test is not registered under ASan. Not done: Linux CI for these commits,
-gamepad checks of target switching, any balance work for multi-enemy fights
-(the shipped tuning was made for one enemy), and a frame-time comparison with
-the shadow pass enabled. The owner-waived and deferred items above are
-unchanged, and the sustained fuzz campaign now has six targets instead of five.
+test is not registered under ASan. Two later tests (30,000 deterministic byte
+mutations each of WAV and scene input) also pass in both configurations; they
+are not a substitute for the libFuzzer targets.
+
+Further evidence gathered on the same machine (RTX 5090, 1280x720, MSVC
+Release), all from commit `b928e6d`:
+
+- **Package.** `build/packages/hue-v1-b928e6d` was built with `--require-clean`,
+  verified, and passed the package smoke (twenty injected outcomes and restarts
+  from a copy outside the checkout, all twelve sounds loading) and the reload
+  smoke (twenty accepted and twenty rejected shader edits, scene switching).
+  Still not a clean-machine check.
+- **Frame pacing with the shadow pass.** The Week 12 two-page scenario measured
+  p50 16.687 ms / p95 16.861 ms from the package (Week 12: 16.683 / 16.816;
+  Week 16: 16.681 / 16.895). The four-actor `gauntlet` scene measured
+  16.683 / 16.885. These are presentation-paced wall intervals: they show the
+  frame still fits the display interval, not what the shadow pass costs.
+- **Saved Tracy capture.** A 25-second capture of the rendered `gauntlet`
+  encounter smoke (1,489 frames) is at `build/evidence/encounter-b928e6d.tracy`
+  with a zone export beside it. Mean CPU time per call: `Encounter::tick`
+  21.9 us for four actors, `physics::update` 11.2 us, `combat_hud` 51.7 us,
+  `Animator::update` 2.9 us. `Renderer::draw_frame` averages 16.57 ms because it
+  waits for presentation; the capture has CPU zones only, no GPU timings, so it
+  does not isolate render cost. The scenario injects outcomes and is not
+  representative play.
+- **Clang.** GitHub Actions did not run for these commits: every job reports
+  "not started because your account is locked due to a billing issue". As a
+  partial substitute the new and changed sources were syntax-checked with the
+  Clang bundled with Visual Studio using the Linux build's warning flags
+  (conversion, sign-conversion and shadow as errors) with no diagnostics in
+  project code. That is a Windows-target check; the Linux build, the Linux
+  tests and all six fuzz targets remain unrun for this work.
+
+Not done: gamepad checks of target switching, any balance work for multi-enemy
+fights (the shipped tuning was made for one enemy), and the sustained fuzz
+campaign, which now has six targets instead of five and needs a Linux Clang
+toolchain this machine's WSL does not have. The owner-waived and deferred
+items above are otherwise unchanged.
 
 ## Reproduce and review
 

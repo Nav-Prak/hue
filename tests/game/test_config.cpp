@@ -196,3 +196,45 @@ TEST_CASE("scene: names are whitelisted identifiers, never paths") {
     CHECK_FALSE(read_scene_file("../arena"));
     CHECK_FALSE(read_scene_file("no_such_scene_here"));
 }
+TEST_CASE("scene: deterministic byte mutations only ever yield valid scenes") {
+    // Not a substitute for the libFuzzer target (Linux/Clang only); this keeps
+    // some hostile-input coverage in the Windows and ASan test runs.
+    const std::vector<std::vector<char>> seeds = {
+        std::vector<char>(kScene, kScene + sizeof(kScene) - 1), shipped("arena"), shipped("gauntlet")};
+    std::uint32_t state = 0x2026u;
+    const auto next = [&state]() {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return state;
+    };
+    static const char kAlphabet[] = "{}[]\",:-.0123456789eE \n\ax";
+    unsigned accepted = 0;
+    for (int i = 0; i < 30000; ++i) {
+        auto bytes = seeds[next() % seeds.size()];
+        const unsigned edits = 1 + next() % 3;
+        for (unsigned e = 0; e < edits; ++e) {
+            const char replacement = next() % 4 == 0 ? static_cast<char>(next())
+                                                     : kAlphabet[next() % (sizeof(kAlphabet) - 1)];
+            switch (next() % 4) {
+            case 0:
+            case 1:
+                bytes[next() % bytes.size()] = replacement;
+                break;
+            case 2:
+                bytes.resize(1 + next() % bytes.size());
+                break;
+            default:
+                bytes.insert(bytes.begin() + next() % bytes.size(), replacement);
+                break;
+            }
+        }
+        std::vector<char> exact(bytes.begin(), bytes.end());
+        auto parsed = parse_scene(exact.data(), exact.size());
+        if (!parsed)
+            continue;
+        ++accepted;
+        REQUIRE(valid_scene(parsed.value()));
+    }
+    CHECK(accepted > 100);
+}

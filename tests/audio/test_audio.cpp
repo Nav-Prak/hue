@@ -336,3 +336,57 @@ TEST_CASE("mixer: loops continue, are never stolen, and stop on request") {
     CHECK(mixer.active_voices() == 0);
     CHECK(out[0] == 0.0f);
 }
+
+TEST_CASE("wav: deterministic byte mutations never break the parser's guarantees") {
+    // Not a substitute for the libFuzzer target (Linux/Clang only); this keeps
+    // some hostile-input coverage in the Windows and ASan test runs.
+    const std::vector<std::vector<unsigned char>> seeds = {
+        wav(1, 1, 22050, 16, pcm({1, -2, 300, -400, 5000, -6000})),
+        wav(1, 2, 48000, 16, pcm({1, -2, 300, -400})),
+        wav(3, 1, 8000, 32, {0, 0, 0, 0x3f, 0, 0, 0x80, 0xbf}),
+    };
+    std::uint32_t state = 0x2026u;
+    const auto next = [&state]() {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return state;
+    };
+    unsigned accepted = 0;
+    for (int i = 0; i < 30000; ++i) {
+        auto bytes = seeds[next() % seeds.size()];
+        const unsigned edits = 1 + next() % 4;
+        for (unsigned e = 0; e < edits; ++e) {
+            switch (next() % 4) {
+            case 0:
+                bytes[next() % bytes.size()] = static_cast<unsigned char>(next());
+                break;
+            case 1:
+                bytes[next() % bytes.size()] ^= static_cast<unsigned char>(1u << (next() % 8));
+                break;
+            case 2:
+                bytes.resize(1 + next() % bytes.size());
+                break;
+            default:
+                bytes.insert(bytes.begin() + next() % bytes.size(), static_cast<unsigned char>(next()));
+                break;
+            }
+        }
+        // Exact-size heap copy so ASan sees any read past the end.
+        std::vector<unsigned char> exact(bytes.begin(), bytes.end());
+        auto parsed = parse_wav(exact.data(), exact.size());
+        if (!parsed)
+            continue;
+        ++accepted;
+        const auto& sound = parsed.value();
+        REQUIRE(sound.samples.size() > 0);
+        REQUIRE(sound.samples.size() <= exact.size());
+        REQUIRE(sound.sample_rate >= hue::audio::kMinSampleRate);
+        REQUIRE(sound.sample_rate <= hue::audio::kMaxSampleRate);
+        for (std::size_t s = 0; s < sound.samples.size(); ++s) {
+            REQUIRE(sound.samples[s] >= -1.0f);
+            REQUIRE(sound.samples[s] <= 1.0f);
+        }
+    }
+    CHECK(accepted > 100); // the mutations are not all trivially rejected
+}
