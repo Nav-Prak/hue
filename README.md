@@ -1,6 +1,6 @@
 # Hue
 
-> A from-scratch C++20/Vulkan third-person combat runtime: custom memory systems, skeletal animation, ECS, Jolt physics, bounded asset loading with fuzz coverage, runtime combat debug tools, and a playable enemy encounter.
+> A from-scratch C++20/Vulkan third-person combat runtime: custom memory systems, skeletal animation, ECS, Jolt physics, bounded asset loading with fuzz coverage, runtime combat debug tools, data-driven multi-enemy scenes, a shadow-mapped sun, sound effects, and a playable encounter.
 
 The two-attack Windows v1 implementation is frozen as a local candidate. On
 October 14, 2026 the owner waived external acceptance gates to finish this scope
@@ -26,13 +26,21 @@ Run `build/windows-msvc/game/Release/hue.exe` after building (Linux:
 | Light / heavy attack | LMB / E | X / Y |
 | Dodge | Space | B |
 | Toggle lock-on | Tab | Right-stick click |
+| Next lock-on target | Q | Right bumper |
 | Cycle game, combat and memory diagnostics | F2 | Back |
 | Stage scene / tuning edits; apply on reset | F5 / F6; R | — |
+| Stage the next shipped scene; mute | F7; M | — |
 | Debug fly camera; quit | F1; Escape | — |
 
 Attack windows and dodge invulnerability follow clip events. Simultaneous lethal
 hits trade and resolve to player defeat. The result stops gameplay while death
 animation continues. Restart reuses loaded assets and controllers.
+
+Scenes live in `assets/config` and are chosen by name: `hue --scene gauntlet`
+starts the three-enemy scene with props. A scene file lists the player and up to
+seven enemies, static box props, point lights and the sun; see
+[the scene format and its validation](docs/threat-model.md#scene-configuration).
+`--no-audio` runs without opening an output device.
 
 `hue --encounter-smoke --require-renderer` runs 20 scripted reset/outcome cycles
 with real rendering. It injects lethal damage to exercise both results and is
@@ -68,7 +76,7 @@ python tests/package_smoke.py build/packages/hue-review
 ```
 
 The adjacent ZIP includes the executable, seven compiled shaders, models/events,
-scene/tuning data, MSVC Release runtime DLLs, controls and dependency notices.
+sound effects, scene/tuning data, MSVC Release runtime DLLs, controls and dependency notices.
 The manifest records file hashes and source revision/dirty state. Extract the
 whole ZIP, then run `hue.exe`; no compiler or Vulkan SDK is needed on the target,
 but Windows x64, SSE4.2 and a Vulkan 1.3 graphics driver are required.
@@ -92,13 +100,14 @@ by these commands.
 ```
 /engine
   /core        # platform, memory, math, containers, jobs, log
-  /render      # vulkan backend, passes, materials, skinning
+  /render      # vulkan backend, shadow + lit passes, materials, skinning
   /anim        # skeletal animation runtime: sampling, blending, events
+  /audio       # bounded WAV parsing, fixed-voice mixer, output device
   /combat      # shared combat logic, hit volumes, enemy AI
   /ecs         # sparse-set ECS
   /physics     # jolt integration layer
   /asset       # gltf import (mesh+skin+anim), shader compile, hot reload
-/game          # character/encounter lifecycle, bitmap HUD and combat diagnostics
+/game          # actor roster, encounter lifecycle, scenes, HUD, audio events, diagnostics
 /tests         # doctest suites
 /tools         # scripts: shader compile, fuzz harnesses (/tools/fuzz)
 /docs          # public timeline, devlog drafts, threat-model.md

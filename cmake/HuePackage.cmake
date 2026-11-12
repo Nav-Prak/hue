@@ -13,6 +13,11 @@ install(FILES "${PROJECT_SOURCE_DIR}/assets/config/arena.json"
     "${PROJECT_SOURCE_DIR}/assets/config/gauntlet.json"
     "${PROJECT_SOURCE_DIR}/assets/config/tuning.json"
     DESTINATION assets/config COMPONENT HueRuntime)
+foreach(sound fight_start swing_light swing_heavy hit_light hit_heavy stagger dodge death
+        lock_on lock_off victory defeat)
+    install(FILES "${PROJECT_SOURCE_DIR}/assets/audio/${sound}.wav"
+        DESTINATION assets/audio COMPONENT HueRuntime)
+endforeach()
 install(FILES "${PROJECT_SOURCE_DIR}/docs/package-readme.txt" DESTINATION .
     RENAME README.txt COMPONENT HueRuntime)
 install(FILES "${PROJECT_SOURCE_DIR}/docs/release-candidate.md" DESTINATION .
@@ -47,6 +52,7 @@ FetchContent_GetProperties(tracy)
 install(FILES "${tracy_SOURCE_DIR}/public/libbacktrace/LICENSE"
     DESTINATION licenses/tracy/libbacktrace COMPONENT HueRuntime)
 hue_install_license(cgltf LICENSE)
+hue_install_license(miniaudio LICENSE)
 hue_install_license(stb LICENSE)
 hue_install_license(joltphysics LICENSE)
 hue_install_license(volk LICENSE.md)

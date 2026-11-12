@@ -31,6 +31,11 @@ target_link_libraries(fuzz_tuning PRIVATE hue::core hue::options)
 target_compile_options(fuzz_tuning PRIVATE -fsanitize=fuzzer)
 target_link_options(fuzz_tuning PRIVATE -fsanitize=fuzzer)
 
+add_executable(fuzz_wav fuzz_wav.cpp)
+target_link_libraries(fuzz_wav PRIVATE hue::audio hue::options)
+target_compile_options(fuzz_wav PRIVATE -fsanitize=fuzzer)
+target_link_options(fuzz_wav PRIVATE -fsanitize=fuzzer)
+
 add_executable(fuzz_shader_contract fuzz_shader_contract.cpp)
 target_link_libraries(fuzz_shader_contract PRIVATE hue::render hue::options)
 target_compile_options(fuzz_shader_contract PRIVATE -fsanitize=fuzzer)

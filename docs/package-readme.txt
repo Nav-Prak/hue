@@ -12,13 +12,17 @@ WASD / left stick: move; Shift to run (stick magnitude controls pad speed)
 Hold right mouse / right stick: orbit camera
 Left mouse / X: light attack     E / Y: heavy attack
 Space / B: dodge                Tab / right-stick click: lock-on
+Q / right bumper: next lock-on target
 F2 / Back: cycle game, combat diagnostics, CPU allocation diagnostics
 F5: validate scene edits        F6: validate tuning edits
+F7: stage the next shipped scene (arena, gauntlet)   M: mute
 R applies valid scene/tuning edits. Bad edits keep the working data.
+Start in a named scene with: hue.exe --scene gauntlet
 F1: debug fly camera            Escape: quit
 
 Optional local telemetry: hue.exe --telemetry C:/writable/fights.jsonl
 Create the parent folder first. No telemetry is sent over the network.
+Silent run: hue.exe --no-audio   Device check: hue.exe --audio-smoke
 Optional rendering check: hue.exe --require-renderer --frames 120
 Lifecycle regression: hue.exe --encounter-smoke --require-renderer
 The lifecycle smoke injects outcomes; it is not a balance or human playtest.
@@ -27,8 +31,11 @@ KNOWN LIMITS / ACCEPTANCE
 On October 14, 2026 the owner waived external acceptance gates to finish the
 existing two-attack scope. Waived does not mean tested or passed. Read
 RELEASE-NOTES.md for the frozen scope, evidence and remaining risks.
-One arena, one enemy, two attacks. No parry, third attack, boss phase, shadows,
-pose interpolation or general editor. Physical gamepad and clean-machine checks,
+One arena with data-driven scenes (one to seven enemies, box props, lights),
+two attacks, one shadow-casting sun and procedural sound effects. No parry,
+third attack, boss phase, music, pose interpolation or general editor. The
+November additions have automated tests only; nobody has played or listened
+to them. Physical gamepad and clean-machine checks,
 two external playtesters, Linux CI, sustained fuzzing and saved Tracy profiling
 have not been completed and no longer block this local candidate. Local tests,
 sanitizers and runtime input validation remain enabled. Frame pacing on the

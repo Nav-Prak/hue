@@ -37,6 +37,7 @@ add_executable(hue_tests
     core/test_time.cpp
     render/test_spirv.cpp
     render/test_shadow.cpp
+    audio/test_audio.cpp
     assets/test_gltf.cpp
 )
 # The no-exceptions flags propagate from hue_core, so run doctest in its
@@ -46,10 +47,11 @@ target_compile_definitions(hue_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WI
 target_compile_definitions(hue_tests PRIVATE
     HUE_TEST_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tools/fuzz/corpus/gltf"
     HUE_TEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/assets/models"
-    HUE_TEST_CONFIG_DIR="${CMAKE_SOURCE_DIR}/assets/config")
+    HUE_TEST_CONFIG_DIR="${CMAKE_SOURCE_DIR}/assets/config"
+    HUE_TEST_AUDIO_DIR="${CMAKE_SOURCE_DIR}/assets/audio")
 target_compile_definitions(hue_tests PRIVATE HUE_TEST_SHADERS_DIR="${PROJECT_BINARY_DIR}/game/shaders")
 add_dependencies(hue_tests hue_game_shaders)
-target_link_libraries(hue_tests PRIVATE hue_gameplay hue_core hue::asset hue::anim hue::combat hue::ecs hue::physics hue::render doctest::doctest hue::options)
+target_link_libraries(hue_tests PRIVATE hue_gameplay hue_core hue::asset hue::anim hue::audio hue::combat hue::ecs hue::physics hue::render doctest::doctest hue::options)
 if(MSVC)
     # VS 2026 warns on doctest 2.4.12's intentional std::tuple specialization.
     # Keep the suppression scoped to the third-party test harness consumer.
@@ -83,6 +85,16 @@ set_tests_properties(renderer_smoke PROPERTIES
     LABELS "render;smoke"
     TIMEOUT 90
     SKIP_REGULAR_EXPRESSION "HUE_RENDERER_UNAVAILABLE")
+
+# Opens the real output device silently (master gain zero) and checks that it
+# pulls audio from the mixer. Exit code 2 means "no output device here" and
+# becomes a skip. Not registered under sanitizers: platform audio libraries
+# produce leak reports this project does not own.
+if(NOT HUE_SANITIZE)
+    add_test(NAME audio_device_smoke COMMAND hue_game --audio-smoke)
+    set_tests_properties(audio_device_smoke PROPERTIES LABELS "audio;smoke" TIMEOUT 60
+        SKIP_RETURN_CODE 2)
+endif()
 
 find_package(Python3 COMPONENTS Interpreter)
 add_test(NAME encounter_smoke

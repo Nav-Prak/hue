@@ -72,7 +72,7 @@ def main():
     global GAME_LOG
     GAME_LOG = tempfile.TemporaryFile()
     proc = subprocess.Popen(
-        [game, "--debug-channel", str(port)],
+        [game, "--no-audio", "--debug-channel", str(port)],
         stdout=GAME_LOG,
         stderr=GAME_LOG,
     )

@@ -12,9 +12,10 @@ add_library(hue_gameplay STATIC
     src/combat_hud.cpp
     src/combat_character.cpp
     src/follow_camera.cpp
+    src/game_audio.cpp
 )
 target_include_directories(hue_gameplay PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(hue_gameplay PUBLIC hue::core hue::asset hue::anim hue::combat hue::physics hue::render)
+target_link_libraries(hue_gameplay PUBLIC hue::core hue::asset hue::anim hue::audio hue::combat hue::physics hue::render)
 
 add_executable(hue_game
     src/characters.cpp
@@ -51,3 +52,6 @@ add_custom_command(TARGET hue_game POST_BUILD
 add_custom_command(TARGET hue_game POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets/config $<TARGET_FILE_DIR:hue_game>/assets/config)
+add_custom_command(TARGET hue_game POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/audio $<TARGET_FILE_DIR:hue_game>/assets/audio)

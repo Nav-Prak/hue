@@ -30,7 +30,8 @@ remote code execution via gameplay netcode.
 | Textures / images (PNG/JPEG) | `load_gltf` / `load_gltf_skinned` | **Week 6** — decoded via stb_image behind caps, fuzzed |
 | Skinned / animated glTF | `hue::asset::load_gltf_skinned` | **Weeks 6–7** — skeleton/clip validation, fuzzed, bounded sampling + GPU palettes |
 | Animation event JSON | `hue::anim::parse_animation_events` | **Weeks 7/12** — 64 KiB/256-event caps, strict schema, clip/time validation; dedicated parser/semantic-validation fuzz target registered in CI |
-| Scene JSON | `parse_scene` | Week 13 bounded schema and reset-boundary staging |
+| Scene JSON | `parse_scene` | Version 2 (November 2026): bounded record lists for actors, props and lights; whole-scene validation; reset-boundary staging; fuzzed |
+| WAV sound effects | `hue::audio::parse_wav` | November 2026 — Hue's own bounded PCM16/float32 reader; miniaudio decoders compiled out; parse-and-mix fuzz target |
 | Combat tuning JSON | `parse_tuning` | Week 14 bounded schema, clip checks, reset-boundary staging |
 
 ### glTF loader trust boundary (Week 5)
@@ -179,20 +180,67 @@ as untrusted text (bounded buffers, no `std::string` growth from input).
 
 ## Scene configuration
 
-The game reads an executable-relative `assets/config/arena.json` at startup and
-on F5. `game/src/config_json.cpp` is a 4 KiB, allocation-free flat JSON subset:
-32 fields, 47-byte ASCII keys/strings, four numeric elements per array; duplicate
-keys, malformed number grammar, nonfinite values, escapes/nesting and trailing
-data fail. `scene_config.cpp` requires the exact versioned schema and approved
-arena/rig IDs, never file paths. Two finite, separated spawns are confined to the
-existing arena's clear staging strip. This is not a general scene deserializer.
+Scenes are version 2 files under the executable's `assets/config`. A scene is
+chosen by **name**, never by path: `--scene`, F7 and the `scene.load` debug
+command all pass through `valid_scene_name` (1-32 characters of `[a-z0-9_]`)
+before the name is joined to the fixed directory and `.json` suffix, so
+separators, dots, drive letters and absolute paths cannot reach the file system.
 
-Validation precedes staging. An invalid candidate cannot alter the live or
-pending scene. Accepted transforms apply on reset with existing resources; no
-new bodies/assets/entities accumulate. Required startup files fail closed.
-Tests exercise truncation, invalid references/geometry and transactional staging.
-`fuzz_scene` is memory-only with seeds and a 60-second CI invocation. See
-[actual local verification](week13.md); registered CI is not evidence of a CI run.
+`game/src/config_json.cpp` remains an allocation-free JSON subset with 47-byte
+ASCII keys/strings and four numbers per array; duplicate keys, malformed number
+grammar, non-finite values, escapes and trailing data fail. Tuning still uses the
+4 KiB flat form. Scenes use `parse_config_document`: at most 16 KiB, one root
+object of 32 fields plus at most four lists of at most sixteen flat records of at
+most eight fields. Records cannot nest. Parse storage is fixed-size.
+
+`scene_config.cpp` requires the exact schema: every root key, list and record
+field is whitelisted and counted, the version must be 2 (version 1 files are
+rejected, not migrated), and arena and rig identifiers come from a fixed list.
+`valid_scene` then checks the scene as a whole: 2-8 actors with the player first,
+finite ground-level positions inside the arena, at least a metre apart and clear
+of the built-in obstacles and of every prop; at most sixteen box props with
+bounded size, height and colour; at most four lights with bounded radius and
+intensity; a sun that points clearly downward with bounded colour and intensity.
+The same function gates staging, so a scene built in code is held to the same
+rules as a parsed one.
+
+Validation precedes staging; an invalid candidate cannot alter the live or
+pending scene. An accepted scene applies at reset: characters and capsule
+controllers are reused or parked rather than destroyed, new prop bodies are
+created before the old ones are removed, and a failure backs out. Tests cover
+every truncation, each rejection class, scene switching in the live game, and
+stable actor, body, prop and tagged-memory counts across repeated changes.
+`fuzz_scene` is memory-only with seeds and a 60-second CI invocation; registered
+CI is not evidence of a CI run. The original two-spawn format is described in
+[Week 13](week13.md).
+
+## Audio (November 2026)
+
+Sound effects are the only audio input. `GameAudio` opens twelve fixed file
+names under `assets/audio`; no name comes from data. Each file is read through
+the bounded reader (4 MiB cap) and parsed by `hue::audio::parse_wav`, which
+accepts integer PCM 16-bit and IEEE float 32-bit, one or two channels, 8-48 kHz
+and at most twenty seconds. Chunk offsets use checked arithmetic and are compared
+with the bytes present; a declared size that does not fit is an error rather
+than a short read. The chunk walk is capped, `fmt` must precede a single `data`
+chunk, block alignment must agree with the format, and non-finite float samples
+reject the file. A rejected or missing file leaves that effect silent.
+
+miniaudio is used only to open the output device. Its decoders, encoders,
+resource manager, node graph and engine are compiled out, so no file bytes reach
+third-party parsing code. The mixer has sixteen fixed voices and a 64-entry
+single-producer/single-consumer command ring; when either is full, commands are
+dropped and counted. The audio thread does not allocate, lock or log. Sample
+tables are sanitized when registered and are immutable once the device starts;
+play parameters are checked for finiteness and clamped; mixed output is clamped
+to [-1, 1]. Audio never feeds back into gameplay.
+
+`fuzz_wav` parses arbitrary bytes and then mixes whatever was accepted, checking
+that output stays finite and in range. Limits: miniaudio and the platform audio
+stack allocate with their own allocators and are not fuzzed here; the device
+smoke test is not registered under sanitizers because platform audio libraries
+produce reports this project does not own. Nobody has listened to the effects on
+this pass, so their loudness and character are unreviewed.
 
 ## Remaining deferred boundaries
 
@@ -230,6 +278,12 @@ Runtime SPIR-V is capped at 128 KiB and 4096 IDs, semantically checked by the
 already-pinned SPIRV-Tools validator (runtime use approved by the owner), then
 checked against seven fixed shader interfaces. Entry stage, locations/types,
 descriptor sets/bindings, block offsets/strides and push constants must match.
+Since November 2026 the frame block also carries the shadow matrix and
+parameters (336 bytes), and exactly one depth-comparison sampler is allowed, in
+the mesh fragment shader only. The shadow pass adds no shader files: it reuses
+the two mesh vertex shaders through depth-only pipelines. Light direction,
+colour and shadow bounds from a scene are sanitized before reaching a uniform
+buffer, and the light matrix is total over degenerate input.
 The exact checked byte buffer reaches Vulkan. Replacement pipelines are built
 first; old resources remain until a successful device-idle wait. Failure destroys
 only the candidate. Live handle counters cover modules, layouts and pipelines.

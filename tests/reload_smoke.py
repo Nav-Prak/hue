@@ -35,7 +35,7 @@ def main():
             reserve.bind(("127.0.0.1", 0))
             port = reserve.getsockname()[1]
         with tempfile.TemporaryFile() as log:
-            proc = subprocess.Popen([str(root / source.name), "--debug-channel", str(port)], cwd=root, stdout=log, stderr=log)
+            proc = subprocess.Popen([str(root / source.name), "--no-audio", "--debug-channel", str(port)], cwd=root, stdout=log, stderr=log)
             try:
                 deadline = time.monotonic() + 25
                 sock = None
@@ -49,6 +49,8 @@ def main():
                 with sock:
                     assert command(sock,"fight.start")["ok"]
                     time.sleep(0.05)
+                    sound = command(sock,"audio.status")["data"]
+                    assert sound["sounds"] == 12 and not sound["device"], sound
                     tuning_path = root / "assets/config/tuning.json"
                     tuning = json.loads(tuning_path.read_text())
                     tuning["revision"] = 2

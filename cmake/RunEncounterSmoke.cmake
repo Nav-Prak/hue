@@ -4,7 +4,7 @@
 if(HUE_PYTHON AND HUE_TELEMETRY_SCRIPT)
     set(command ${HUE_PYTHON} ${HUE_TELEMETRY_SCRIPT} ${HUE_GAME})
 else()
-    set(command ${HUE_GAME} --encounter-smoke)
+    set(command ${HUE_GAME} --encounter-smoke --no-audio)
 endif()
 if(UNIX AND NOT APPLE)
     find_program(XVFB_RUN xvfb-run REQUIRED)

@@ -30,11 +30,13 @@ rejected rather than silently presented as the committed build.
 
 ## Scope cuts and decisions
 
-No third attack, boss phase, parry, additional enemy, shadow map, general editor,
-render graph, bindless system, archetype ECS, ragdoll or Jev integration is required
-for this candidate. These were optional or outside the minimum slice; bypassing
+No third attack, boss phase, parry, general editor, render graph, bindless
+system, archetype ECS, ragdoll or Jev integration is required for this
+candidate. These were optional or outside the minimum slice; bypassing
 acceptance gates does not make them implemented. Pose interpolation and broad
-resolution/DPI polish are not implemented or certified.
+resolution/DPI polish are not implemented or certified. Additional enemies, a
+shadow map and audio were cut from the October 14 candidate and added afterwards
+at the owner's request; see "November engine extension" below.
 
 External playtester acceptance, clean-target-machine acceptance, physical gamepad
 acceptance and Linux CI as a Windows completion gate are **owner-waived**. Linux
@@ -105,6 +107,45 @@ Verification on the development machine (RTX 5090, MSVC): Windows Release
 and `build/final-asan-ctest.log`. Nobody has looked at the new camera or HUD in
 a running window on this pass, and the owner-waived and deferred items above are
 unchanged.
+
+## November engine extension
+
+After the completion pass the owner asked for four engine features beyond the
+frozen slice. They are implemented and covered by automated tests on the
+development machine; none has been playtested, and nobody has listened to the
+audio.
+
+- **Multi-actor encounters.** One player and one to seven enemies. Each enemy
+  runs its own AI; a swing can hit each victim once; every enemy must fall to
+  win; Q / right bumper moves the lock-on between living enemies in range.
+  Actors that share a rig share its mesh, clips and GPU upload. Enemy capsules
+  do not collide with each other, so crowding enemies steer apart instead.
+- **Scene loading.** Version 2 scene files describe actors, static box props
+  with collision, point lights and the sun. Scenes are chosen by whitelisted
+  name (`--scene`, F7, `scene.load`) and applied at reset, reusing characters
+  and controllers. Two scenes ship: `arena` and `gauntlet` (three enemies, four
+  props). Version 1 scene files are rejected, not migrated. The arena mesh
+  itself is still built in code; props add to it rather than replace it.
+- **Shadow map.** One 2048 x 2048 map for the sun, 3x3 PCF, covering a 16 m
+  radius around the arena centre; ground beyond that is simply lit. Point
+  lights cast no shadows. A window capture of both scenes showed characters,
+  props and the floating cube casting onto the floor without acne; that is a
+  single look on one GPU, not a quality study.
+- **Audio.** Twelve project-authored procedural sound effects driven by
+  encounter events, with distance attenuation and panning. Hue parses the WAV
+  files itself; miniaudio only opens the output device. No music. `--no-audio`
+  and M (mute) are available, and a machine without an output device runs
+  silently.
+
+Verification: Windows Release 182/182 CTest tests (110.39 s); Windows ASan 181/181
+(160.77 s). Logs:
+`build/final-release-ctest.log` and `build/final-asan-ctest.log`. The Release
+run includes the silent audio-device smoke on this machine's real output; that
+test is not registered under ASan. Not done: Linux CI for these commits,
+gamepad checks of target switching, any balance work for multi-enemy fights
+(the shipped tuning was made for one enemy), and a frame-time comparison with
+the shadow pass enabled. The owner-waived and deferred items above are
+unchanged, and the sustained fuzz campaign now has six targets instead of five.
 
 ## Reproduce and review
 

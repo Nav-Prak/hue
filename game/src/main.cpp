@@ -20,6 +20,7 @@
 #include "fight_report.h"
 #include "fly_camera.h"
 #include "follow_camera.h"
+#include "game_audio.h"
 #include "runtime_files.h"
 #include "test_meshes.h"
 
@@ -52,6 +53,7 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -150,6 +152,7 @@ struct GameDebugContext {
     bool quit_requested = false;
     hue::Renderer* renderer = nullptr; // null when running without a GPU
     Encounter* encounter = nullptr;
+    const GameAudio* audio = nullptr;
     char* scene_name = nullptr; // 33-byte buffer in main holding the active scene name
     const char* tuning_path = nullptr;
     bool reset_requested = false, start_requested = false;
@@ -198,6 +201,23 @@ void fight_command(void* user_data, const hue::DebugCommandLine& command,
         encounter_state_name(e.state()), e.tuning().revision, e.scene_pending() ? "true" : "false",
         e.tuning_pending() ? "true" : "false", static_cast<double>(e.position(0).x),
         e.actor_count(), e.enemies_alive(), e.scene().prop_count, e.lock_target());
+}
+
+void audio_status_command(void* user_data, const hue::DebugCommandLine& command,
+                          hue::DebugResponse& response) {
+    (void)command;
+    const auto* context = static_cast<const GameDebugContext*>(user_data);
+    if (context->audio == nullptr) {
+        response.set_error("audio unavailable");
+        return;
+    }
+    const GameAudio& audio = *context->audio;
+    response.append_format("{\"sounds\":%u,\"device\":%s,\"muted\":%s,\"voices\":%u,"
+                           "\"dropped\":%u,\"frames_mixed\":%llu}",
+                           audio.loaded(), audio.has_device() ? "true" : "false",
+                           audio.muted() ? "true" : "false", audio.mixer().active_voices(),
+                           audio.mixer().dropped_commands(),
+                           static_cast<unsigned long long>(audio.mixer().frames_mixed()));
 }
 
 void config_reload_command(void* user_data, const hue::DebugCommandLine& command,
@@ -467,6 +487,8 @@ int main(int argc, char** argv) {
     bool require_renderer = false;
     bool encounter_smoke = false;
     bool baseline_hud = false; // reproduce Week 12's two-page smoke scenario
+    bool no_audio = false;     // load and validate sounds but never open a device
+    bool audio_smoke = false;  // open the device silently, confirm it runs, exit
     const char* telemetry_path = nullptr;
     char scene_name[33] = "arena"; // approved name, resolved under assets/config
     char tuning_path[1024];
@@ -489,6 +511,10 @@ int main(int argc, char** argv) {
                 return 1;
             }
             std::snprintf(scene_name, sizeof(scene_name), "%s", argv[++i]);
+        } else if (std::strcmp(argv[i], "--no-audio") == 0) {
+            no_audio = true;
+        } else if (std::strcmp(argv[i], "--audio-smoke") == 0) {
+            audio_smoke = true;
         } else if (std::strcmp(argv[i], "--baseline-hud") == 0) {
             baseline_hud = true;
         } else if (std::strcmp(argv[i], "--encounter-smoke") == 0) {
@@ -505,6 +531,34 @@ int main(int argc, char** argv) {
                 debug_channel_port = parsed_port;
             }
         }
+    }
+
+    if (audio_smoke) {
+        // Device check without a window or a sound: every shipped effect must
+        // parse, the device must open, and its callback must pull frames from
+        // the mixer. Master gain stays at zero throughout.
+        GameAudio probe;
+        if (probe.load() != kGameSoundCount) {
+            HUE_LOG_ERROR("audio smoke: a shipped sound failed to load");
+            return 1;
+        }
+        probe.set_muted(true);
+        if (!probe.open_device()) {
+            HUE_LOG_WARN("HUE_AUDIO_UNAVAILABLE: no output device on this machine");
+            return 2; // distinct exit code: the test skips instead of failing
+        }
+        EncounterEvent chime;
+        chime.type = EncounterEventType::kFightStart;
+        probe.handle(chime, {}, {1.0f, 0.0f, 0.0f});
+        for (int waited = 0; waited < 300 && probe.mixer().frames_mixed() < 4800; ++waited)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (probe.mixer().frames_mixed() < 4800) {
+            HUE_LOG_ERROR("audio smoke: the device never asked for audio");
+            return 1;
+        }
+        HUE_LOG_INFO("audio_smoke PASS: %llu frames mixed silently",
+                     static_cast<unsigned long long>(probe.mixer().frames_mixed()));
+        return 0;
     }
 
     auto scene_bytes = read_scene_file(scene_name);
@@ -641,6 +695,12 @@ int main(int argc, char** argv) {
             RigAsset{std::move(skinned.value()), std::move(events.value()), mesh});
         rigs[i] = &*rig_storage[i];
     }
+    // Sounds always load (so a bad file is reported even on silent runs);
+    // the device is optional and its absence never stops the game.
+    GameAudio audio;
+    audio.load();
+    if (!no_audio && !audio.open_device())
+        HUE_LOG_WARN("no audio output; continuing silently");
     hue::MeshDraw actor_draws[kMaxActors];
     ActorRoster roster(physics.value(), rigs);
     if (!roster.initialize()) {
@@ -709,6 +769,11 @@ int main(int argc, char** argv) {
             registered = debug_channel.value().register_command(
                 "shader.reload", "reload .spv shaders and rebuild the pipeline",
                 &shader_reload_command, &debug_context);
+        }
+        if (registered) {
+            registered = debug_channel.value().register_command(
+                "audio.status", "loaded sounds, device, voices and dropped commands",
+                &audio_status_command, &debug_context);
         }
         for (const char* name : {"fight.status", "fight.start", "fight.reset"}) {
             if (registered)
@@ -811,6 +876,7 @@ int main(int argc, char** argv) {
 #if defined(HUE_DEBUG_CHANNEL)
     debug_context.encounter = &encounter;
     debug_context.scene_name = scene_name;
+    debug_context.audio = &audio;
     debug_context.tuning_path = tuning_path;
 #endif
     double frame_samples[4096]{};
@@ -871,6 +937,10 @@ int main(int argc, char** argv) {
             HUE_LOG_INFO("%s (%s)", reload_status, next);
         }
 
+        if (input.key_pressed(hue::key::kM)) {
+            audio.set_muted(!audio.muted());
+            HUE_LOG_INFO("audio %s", audio.muted() ? "muted" : "unmuted");
+        }
         if (input.key_pressed(hue::key::kF6)) {
             reload_status = "TUNING REJECTED - LAST WORKING DATA KEPT";
             auto bytes = read_config_file(tuning_path);
@@ -957,6 +1027,16 @@ int main(int argc, char** argv) {
                 HUE_LOG_ERROR("encounter tick failed");
                 return 1;
             }
+        }
+        {
+            // Presentation only: drain what the ticks queued and voice it from
+            // the follow camera's point of view.
+            EncounterEvent events[kMaxEncounterEvents];
+            const std::uint32_t event_count = encounter.drain_events(events, kMaxEncounterEvents);
+            const float listener_yaw = follow_camera.yaw();
+            const hue::Vec3 listener_right{std::cos(listener_yaw), 0.0f, -std::sin(listener_yaw)};
+            for (std::uint32_t e = 0; e < event_count; ++e)
+                audio.handle(events[e], follow_camera.position(), listener_right);
         }
         if (auto report =
                 fight_recorder.observe(encounter, monotonic_seconds(), telemetry_source)) {

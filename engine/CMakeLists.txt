@@ -2,6 +2,7 @@
 add_subdirectory(core)
 add_subdirectory(asset)    # Week 5 (render consumes its mesh data types)
 add_subdirectory(anim)
+add_subdirectory(audio)
 add_subdirectory(render)
 add_subdirectory(ecs)
 add_subdirectory(physics)

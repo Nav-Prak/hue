@@ -13,3 +13,4 @@
 *.bin binary
 *.spv binary
 *.tracy binary
+*.wav binary

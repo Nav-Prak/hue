@@ -36,17 +36,18 @@ class CampaignTests(unittest.TestCase):
         return subprocess.CompletedProcess(command, 0)
 
     def test_round_robin_logs_counters_and_completed_resume(self):
-        with patch.object(campaign.subprocess, "run", side_effect=self.success) as run, patch.object(campaign.time, "monotonic", side_effect=[0, 10, 10, 20, 20, 30, 30, 40, 40, 50]):
-            self.assertEqual(campaign.run_campaign(self.binary, self.output, 50, 10), 0)
+        budget = 10 * len(campaign.TARGETS)  # one ten-second slice per target
+        with patch.object(campaign.subprocess, "run", side_effect=self.success) as run, patch.object(campaign.time, "monotonic", side_effect=[t for i in range(len(campaign.TARGETS)) for t in (i * 10, i * 10 + 10)]):
+            self.assertEqual(campaign.run_campaign(self.binary, self.output, budget, 10), 0)
         state = json.loads((self.output / "campaign.json").read_text())
         self.assertEqual(state["status"], "completed")
         self.assertEqual([r["target"] for r in state["runs"]], list(campaign.TARGETS))
         self.assertEqual(state["runs"][0]["statistics"]["number_of_executed_units"], 123)
         self.assertEqual(state["runs"][0]["statistics"]["last_coverage"], 12)
         self.assertFalse((self.output / "campaign.lock").exists())
-        self.assertEqual(run.call_count, 5)
+        self.assertEqual(run.call_count, len(campaign.TARGETS))
         with patch.object(campaign.subprocess, "run") as resumed:
-            self.assertEqual(campaign.run_campaign(self.binary, self.output, 50, 10, True), 0)
+            self.assertEqual(campaign.run_campaign(self.binary, self.output, budget, 10, True), 0)
             resumed.assert_not_called()
 
     def test_failure_stops_and_retains_log(self):

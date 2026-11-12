@@ -11,7 +11,7 @@ import subprocess
 import time
 
 TARGETS = {"gltf": 1048576, "animation_events": 65537, "scene": 16385,
-           "tuning": 4097, "shader_contract": 131073}
+           "tuning": 4097, "shader_contract": 131073, "wav": 65537}
 SOURCE = Path(__file__).resolve().parents[1]
 
 
@@ -41,8 +41,8 @@ def statistics(log):
 
 
 def initialize(binary_dir, output, seconds, resume):
-    if not 5 <= seconds <= 172800:
-        raise ValueError("budget must be 5..172800 seconds across all five targets")
+    if not len(TARGETS) <= seconds <= 172800:
+        raise ValueError("budget must be 6..172800 seconds across all targets")
     binaries = {}
     for target in TARGETS:
         path = binary_dir / ("fuzz_" + target)

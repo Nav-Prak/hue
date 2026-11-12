@@ -9,12 +9,12 @@ and enough free space for generated corpus/logs. From a clean committed checkout
 
 ```sh
 cmake --preset linux-clang-sanitized -DHUE_FUZZ=ON -DHUE_TRACY_ENABLE=OFF
-cmake --build --preset linux-sanitized --target fuzz_gltf fuzz_animation_events fuzz_scene fuzz_tuning fuzz_shader_contract
+cmake --build --preset linux-sanitized --target fuzz_gltf fuzz_animation_events fuzz_scene fuzz_tuning fuzz_shader_contract fuzz_wav
 python3 tools/fuzz_campaign.py --binary-dir build/linux-clang-sanitized/tools/fuzz --output build/campaign-24h --seconds 86400 --slice-seconds 900
 ```
 
 The last command is for a future explicitly started run, not a task performed
-by writing these instructions. One worker rotates through all five targets in
+by writing these instructions. One worker rotates through all six targets in
 15-minute slices. The 24-hour budget is cumulative worker elapsed time across
 the suite, **not 24 hours per target**. Startup/shutdown overhead is included;
 per-target actual time, requested time, return status and available libFuzzer
@@ -45,5 +45,5 @@ before recording acceptance. Resume is intended after graceful pauses, not to
 merge different engine revisions.
 
 CI exercises the same runner for only 15 seconds and retains its manifest/logs,
-in addition to the five existing 60-second harness runs. This verifies plumbing,
+in addition to the six existing 60-second harness runs. This verifies plumbing,
 not sustained coverage or human playability.

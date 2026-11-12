@@ -10,14 +10,14 @@ endif()
 
 if(WIN32 OR APPLE OR NOT "$ENV{DISPLAY}" STREQUAL "")
     set(hue_smoke_command "${HUE_GAME}")
-    set(hue_smoke_args --frames 60 --require-renderer)
+    set(hue_smoke_args --frames 60 --require-renderer --no-audio)
 else()
     find_program(HUE_XVFB_RUN_EXECUTABLE xvfb-run)
     if(NOT HUE_XVFB_RUN_EXECUTABLE)
         message(FATAL_ERROR "xvfb-run is required for the renderer smoke test on headless Linux")
     endif()
     set(hue_smoke_command "${HUE_XVFB_RUN_EXECUTABLE}")
-    set(hue_smoke_args -a "${HUE_GAME}" --frames 60 --require-renderer)
+    set(hue_smoke_args -a "${HUE_GAME}" --frames 60 --require-renderer --no-audio)
 endif()
 
 execute_process(

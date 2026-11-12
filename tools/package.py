@@ -22,6 +22,10 @@ ACCEPTANCE = {
 REQUIRED = {"assets/models/player.glb", "assets/models/enemy.glb",
     "assets/models/player.events.json", "assets/models/enemy.events.json",
     "assets/models/LICENSE-KayKit.txt", "assets/config/arena.json", "assets/config/gauntlet.json", "assets/config/tuning.json",
+    *("assets/audio/" + name + ".wav" for name in (
+        "fight_start", "swing_light", "swing_heavy", "hit_light", "hit_heavy", "stagger",
+        "dodge", "death", "lock_on", "lock_off", "victory", "defeat")),
+    "licenses/miniaudio/LICENSE",
     "README.txt", "third-party-notices.txt", "licenses/spirv-tools/LICENSE",
     "licenses/tracy/LICENSE", "licenses/tracy/libbacktrace/LICENSE",
     "licenses/glfw/LICENSE.md", "licenses/cgltf/LICENSE", "licenses/stb/LICENSE",

@@ -2,6 +2,18 @@
 
 **July 6 → November 19, 2026.** Twenty numbered weeks; the final week is four days. From-scratch C++20/Vulkan third-person combat runtime, built in public. November 19 is Hue's project target, independent of external release schedules.
 
+## Engine extension — November 11, 2026
+
+At the owner's request, four features that were cut from the October 14
+candidate were added: multi-actor encounters with target switching, version 2
+scene files (actors, props, lights, sun) chosen by name, one directional shadow
+map, and sound effects through a bounded WAV parser and fixed-voice mixer. These
+are implementation with automated tests, not accepted milestones: no playtest,
+no listening check, no Linux run. See
+[the candidate notes](release-candidate.md#november-engine-extension) and the
+[threat model](threat-model.md) for the new input boundaries. The stretch list
+further down still describes these items as cut; that is the historical plan.
+
 ## Fast track scope decision — October 14, 2026
 
 The owner now authorizes bypassing external acceptance gates. The two-attack
