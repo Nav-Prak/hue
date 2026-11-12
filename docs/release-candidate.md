@@ -171,14 +171,18 @@ Release), all from commit `b928e6d`:
   partial substitute the new and changed sources were syntax-checked with the
   Clang bundled with Visual Studio using the Linux build's warning flags
   (conversion, sign-conversion and shadow as errors) with no diagnostics in
-  project code. That is a Windows-target check; the Linux build, the Linux
-  tests and all six fuzz targets remain unrun for this work.
+  project code. Later the same day the engine libraries and all six fuzz
+  targets were built from a clean clone in WSL2 Ubuntu 24.04 with Clang 18,
+  ASan and UBSan, without warnings in project code, and a one-minute campaign
+  across the six targets passed with no findings. The Linux game executable
+  and the Linux test suite have still not been built or run for this work.
 
 Not done: gamepad checks of target switching, any balance work for multi-enemy
-fights (the shipped tuning was made for one enemy), and the sustained fuzz
-campaign, which now has six targets instead of five and needs a Linux Clang
-toolchain this machine's WSL does not have. The owner-waived and deferred
-items above are otherwise unchanged.
+fights (the shipped tuning was made for one enemy). The sustained fuzz
+campaign, now six targets, was started on November 11 and had not finished
+when this was written; [its run log](fuzz-campaign.md#run-log) says what has
+been observed. The owner-waived and deferred items above are otherwise
+unchanged.
 
 ## Reproduce and review
 

@@ -246,7 +246,8 @@ this pass, so their loudness and character are unreviewed.
 
 - Extended 24–48h fuzz campaign, crash taxonomy, published model — Week 18.
   A resumable one-worker runner and procedure exist
-  ([fuzz-campaign.md](fuzz-campaign.md)); no sustained campaign has been run.
+  ([fuzz-campaign.md](fuzz-campaign.md)); a 24-hour run was started on
+  November 11, 2026 and its outcome is not yet recorded.
 
 ## Local reports and packaging
 
