@@ -365,6 +365,20 @@ struct alignas(16) Mat4 {
         return out;
     }
 
+    // Right-handed orthographic box, depth mapped to 0..1 (Vulkan convention).
+    // near/far are positive distances along the view direction (-Z).
+    [[nodiscard]] static Mat4 orthographic(float left, float right, float bottom, float top,
+                                           float near_plane, float far_plane) noexcept {
+        Mat4 out;
+        out.m[0] = 2.0f / (right - left);
+        out.m[5] = 2.0f / (top - bottom);
+        out.m[10] = 1.0f / (near_plane - far_plane);
+        out.m[12] = -(right + left) / (right - left);
+        out.m[13] = -(top + bottom) / (top - bottom);
+        out.m[14] = near_plane / (near_plane - far_plane);
+        return out;
+    }
+
     friend Mat4 operator*(const Mat4& a, const Mat4& b) noexcept {
         Mat4 out;
 #if HUE_SIMD_SSE

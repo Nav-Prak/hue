@@ -93,6 +93,7 @@ add_library(hue_render STATIC
     src/mesh.cpp
     src/pipeline.cpp
     src/renderer.cpp
+    src/shadow.cpp
     src/spirv.cpp
     src/spirv_contract.cpp
     src/swapchain.cpp

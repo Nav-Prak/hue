@@ -110,7 +110,8 @@ def main():
                             assert command(sock,"shader.reload")["ok"]
                             times.append(time.monotonic()-start)
                             status = command(sock,"render.status")["data"]
-                            assert (status["pipelines"],status["layouts"],status["modules"]) == (4,3,0), status
+                            assert (status["pipelines"],status["layouts"],status["modules"]) == (6,3,0), status
+                            assert status["shadow_map"] == 2048 and status["shadow_draws"] > 0, status
                             assert status["generation"] == i+1, status
                             tags = command(sock,"mem.snapshot")["data"]["tags"]
                             live = {t["tag"]:t["current_bytes"] for t in tags if t["tag"] in ("render","animation","physics","assets")}

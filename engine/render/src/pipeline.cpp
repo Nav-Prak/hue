@@ -238,6 +238,70 @@ graphics_pipeline_create(const ContextState& context, const char* shader_directo
     return pipeline;
 }
 
+// Depth-only pipeline for the shadow pass: one vertex stage, no fragment
+// shader and no color attachment. Slope-scaled depth bias keeps lit surfaces
+// from shadowing themselves at grazing light angles.
+[[nodiscard]] Result<VkPipeline>
+shadow_pipeline_create(const ContextState& context, const char* shader_directory,
+                       const char* vert_name, VkPipelineLayout layout, VkFormat depth_format,
+                       const VkPipelineVertexInputStateCreateInfo& vertex_input) {
+    auto vertex_module = shader_module_create(context, shader_directory, vert_name);
+    if (!vertex_module) {
+        return vertex_module.error();
+    }
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stage.module = vertex_module.value();
+    stage.pName = "main";
+
+    FixedFunction fixed;
+    fixed.rasterization.depthBiasEnable = VK_TRUE;
+    fixed.rasterization.depthBiasConstantFactor = 1.5f;
+    fixed.rasterization.depthBiasSlopeFactor = 2.0f;
+    fixed.blend.attachmentCount = 0;
+    fixed.blend.pAttachments = nullptr;
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+    depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth_stencil.depthTestEnable = VK_TRUE;
+    depth_stencil.depthWriteEnable = VK_TRUE;
+    depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS;
+
+    VkPipelineRenderingCreateInfo rendering_info{};
+    rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering_info.depthAttachmentFormat = depth_format;
+
+    VkGraphicsPipelineCreateInfo pipeline_info{};
+    pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.pNext = &rendering_info;
+    pipeline_info.stageCount = 1;
+    pipeline_info.pStages = &stage;
+    pipeline_info.pVertexInputState = &vertex_input;
+    pipeline_info.pInputAssemblyState = &fixed.input_assembly;
+    pipeline_info.pViewportState = &fixed.viewport;
+    pipeline_info.pRasterizationState = &fixed.rasterization;
+    pipeline_info.pMultisampleState = &fixed.multisample;
+    pipeline_info.pDepthStencilState = &depth_stencil;
+    pipeline_info.pColorBlendState = &fixed.blend;
+    pipeline_info.pDynamicState = &fixed.dynamic;
+    pipeline_info.layout = layout;
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    const VkResult result = vkCreateGraphicsPipelines(context.device, VK_NULL_HANDLE, 1,
+                                                      &pipeline_info, nullptr, &pipeline);
+    vkDestroyShaderModule(context.device, vertex_module.value(), nullptr);
+    --context.live_shader_modules;
+    if (result != VK_SUCCESS) {
+        HUE_LOG_ERROR("vkCreateGraphicsPipelines failed (VkResult %d) for shadow %s",
+                      static_cast<int>(result), vert_name);
+        if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(context.device, pipeline, nullptr);
+        return ErrorCode::kUnknown;
+    }
+    ++context.live_pipelines;
+    return pipeline;
+}
+
 } // namespace
 
 Result<void> pipeline_create(PipelineState& pipeline, const ContextState& context,
@@ -349,6 +413,22 @@ Result<void> pipeline_create(PipelineState& pipeline, const ContextState& contex
     }
     pipeline.skinned_mesh = skinned.value();
 
+    // ---- shadow pass: the same two vertex shaders, depth only. The shadow
+    // map shares the scene depth format.
+    auto shadow_mesh = shadow_pipeline_create(context, shader_directory, "mesh.vert.spv",
+                                              pipeline.mesh_layout, depth_format, mesh_input);
+    if (!shadow_mesh) {
+        return shadow_mesh.error();
+    }
+    pipeline.shadow_mesh = shadow_mesh.value();
+    auto shadow_skinned =
+        shadow_pipeline_create(context, shader_directory, "skinned_mesh.vert.spv",
+                               pipeline.mesh_layout, depth_format, skinned_input);
+    if (!shadow_skinned) {
+        return shadow_skinned.error();
+    }
+    pipeline.shadow_skinned_mesh = shadow_skinned.value();
+
     if (pipeline.hud_layout == VK_NULL_HANDLE) {
         VkPushConstantRange push_range{};
         push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -395,6 +475,16 @@ void pipeline_destroy(PipelineState& pipeline, const ContextState& context) {
     if (pipeline.hud != VK_NULL_HANDLE) {
         vkDestroyPipeline(context.device, pipeline.hud, nullptr);
         pipeline.hud = VK_NULL_HANDLE;
+        --context.live_pipelines;
+    }
+    if (pipeline.shadow_mesh != VK_NULL_HANDLE) {
+        vkDestroyPipeline(context.device, pipeline.shadow_mesh, nullptr);
+        pipeline.shadow_mesh = VK_NULL_HANDLE;
+        --context.live_pipelines;
+    }
+    if (pipeline.shadow_skinned_mesh != VK_NULL_HANDLE) {
+        vkDestroyPipeline(context.device, pipeline.shadow_skinned_mesh, nullptr);
+        pipeline.shadow_skinned_mesh = VK_NULL_HANDLE;
         --context.live_pipelines;
     }
     if (pipeline.triangle_layout != VK_NULL_HANDLE) {

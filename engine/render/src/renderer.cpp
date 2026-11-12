@@ -15,6 +15,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <cmath>
 #include <cstring>
 #include <new>
 
@@ -62,6 +63,7 @@ struct Renderer::State {
     ContextState context;
     SwapchainState swapchain;
     DepthState depth;
+    ShadowState shadow;
     PipelineState pipeline;
     MeshRegistry meshes;
     DescriptorState descriptors;
@@ -74,6 +76,7 @@ struct Renderer::State {
 
     PointLight point_lights[kMaxPointLights];
     std::uint32_t point_light_count = 0;
+    DirectionalLight directional;
 
     VkCommandPool command_pool = VK_NULL_HANDLE;
     VkCommandBuffer command_buffers[kFramesInFlight] = {};
@@ -122,6 +125,7 @@ void state_destroy(Renderer::State& state) {
     sampler_cache_destroy(state.samplers, state.context);
     descriptors_destroy(state.descriptors, state.context);
     pipeline_destroy(state.pipeline, state.context);
+    shadow_destroy(state.shadow, state.context);
     depth_destroy(state.depth, state.context);
     swapchain_destroy(state.swapchain, state.context);
     context_destroy(state.context);
@@ -213,6 +217,30 @@ void state_destroy(Renderer::State& state) {
     return {};
 }
 
+// One frame draw item after validation: which mesh it resolved to, where its
+// joint palette landed in the frame's skin buffer, and whether the camera
+// can see it. The shadow pass and the lit pass both read this.
+struct PreparedDraw {
+    const GpuMesh* mesh = nullptr;
+    std::uint32_t source = 0; // index into the caller's draw array
+    std::uint32_t skin_offset = 0;
+    bool in_view = false;
+};
+
+void set_flipped_viewport(VkCommandBuffer cmd, std::uint32_t width, std::uint32_t height) {
+    // Negative viewport height flips Vulkan's Y-down clip space back to the
+    // engine's Y-up convention; front faces stay counter-clockwise.
+    VkViewport viewport{};
+    viewport.y = static_cast<float>(height);
+    viewport.width = static_cast<float>(width);
+    viewport.height = -static_cast<float>(height);
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    VkRect2D scissor{};
+    scissor.extent = {width, height};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+}
+
 [[nodiscard]] Result<void> record_frame(Renderer::State& state, VkCommandBuffer cmd,
                                         std::uint32_t image_index, std::uint32_t frame,
                                         const Camera& camera, const MeshDraw* draws,
@@ -223,7 +251,228 @@ void state_destroy(Renderer::State& state) {
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     HUE_VK_TRY(vkBeginCommandBuffer(cmd, &begin_info));
 
-    // UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL (contents are cleared anyway).
+    if (draws == nullptr) {
+        draw_count = 0;
+    }
+    if (draw_count > kMaxFrameDraws) {
+        HUE_LOG_WARN("draw list of %u exceeds cap %u; extras dropped", draw_count, kMaxFrameDraws);
+        draw_count = kMaxFrameDraws;
+    }
+
+    // ---- prepare: frame uniforms, joint palettes, visibility. Done before
+    // any pass so the shadow and lit passes see identical data.
+    PreparedDraw prepared[kMaxFrameDraws];
+    std::uint32_t prepared_count = 0;
+    std::uint32_t culled = 0;
+    const bool shadows = draw_count > 0 && state.directional.cast_shadows;
+    if (draw_count > 0) {
+        // The camera position falls out of the rigid inverse of the view matrix.
+        const Mat4 view_projection = camera.view_projection();
+        const Mat4 camera_world = camera.view.inverted_rigid();
+        const Vec3 light_direction = normalize(state.directional.direction);
+        const Mat4 light_view_projection = directional_shadow_matrix(
+            light_direction, state.directional.shadow_center, state.directional.shadow_radius);
+
+        FrameUniforms uniforms;
+        uniforms.view_projection = view_projection;
+        uniforms.camera_position = {camera_world.at(0, 3), camera_world.at(1, 3),
+                                    camera_world.at(2, 3), 0.0f};
+        uniforms.light_direction = {light_direction.x, light_direction.y, light_direction.z,
+                                    static_cast<float>(state.point_light_count)};
+        uniforms.light_color = {state.directional.color.x, state.directional.color.y,
+                                state.directional.color.z, state.directional.intensity};
+        uniforms.ambient_color = {state.directional.ambient.x, state.directional.ambient.y,
+                                  state.directional.ambient.z, 0.0f};
+        for (std::uint32_t l = 0; l < kMaxPointLights; ++l) {
+            uniforms.point_position_radius[l] = {};
+            uniforms.point_color_intensity[l] = {};
+        }
+        for (std::uint32_t l = 0; l < state.point_light_count; ++l) {
+            const PointLight& light = state.point_lights[l];
+            uniforms.point_position_radius[l] = {light.position.x, light.position.y,
+                                                 light.position.z, light.radius};
+            uniforms.point_color_intensity[l] = {light.color.x, light.color.y, light.color.z,
+                                                 light.intensity};
+        }
+        uniforms.light_view_projection = light_view_projection;
+        // Normal offset of about two shadow texels at the default radius.
+        uniforms.shadow_params = {shadows ? 1.0f : 0.0f,
+                                  1.0f / static_cast<float>(state.shadow.size), 0.035f, 0.0f};
+        std::memcpy(state.descriptors.frame_ubo_mapped[frame], &uniforms, sizeof(uniforms));
+        // The shadow pass reuses the mesh vertex shaders: its copy of the
+        // block simply carries the light's matrix as the view-projection.
+        FrameUniforms shadow_uniforms = uniforms;
+        shadow_uniforms.view_projection = light_view_projection;
+        std::memcpy(state.descriptors.shadow_ubo_mapped[frame], &shadow_uniforms,
+                    sizeof(shadow_uniforms));
+
+        const Frustum frustum = Frustum::from_view_projection(view_projection);
+        std::uint32_t skinned_draw_count = 0;
+        for (std::uint32_t d = 0; d < draw_count; ++d) {
+            const GpuMesh* mesh = mesh_registry_resolve(state.meshes, draws[d].mesh);
+            if (mesh == nullptr) {
+                continue; // stale handle; upload path already logged
+            }
+            PreparedDraw item;
+            item.mesh = mesh;
+            item.source = d;
+            item.in_view = true;
+            if (mesh->skinned) {
+                if (draws[d].joint_matrices == nullptr ||
+                    draws[d].joint_count != mesh->joint_count) {
+                    HUE_LOG_WARN("skinned draw has no valid %u-joint palette", mesh->joint_count);
+                    continue;
+                }
+                if (skinned_draw_count >= kMaxSkinnedDraws) {
+                    HUE_LOG_WARN("skinned draw cap reached (%u)", kMaxSkinnedDraws);
+                    continue;
+                }
+                item.skin_offset = skinned_draw_count * asset::kGltfMaxJoints;
+                const VkDeviceSize byte_offset =
+                    static_cast<VkDeviceSize>(item.skin_offset) * sizeof(Mat4);
+                const VkDeviceSize byte_size =
+                    static_cast<VkDeviceSize>(mesh->joint_count) * sizeof(Mat4);
+                auto* destination =
+                    static_cast<std::byte*>(state.descriptors.skin_buffer_mapped[frame]);
+                std::memcpy(destination + byte_offset, draws[d].joint_matrices,
+                            static_cast<std::size_t>(byte_size));
+                HUE_VK_TRY(vmaFlushAllocation(state.context.allocator,
+                                              state.descriptors.skin_buffers[frame].allocation,
+                                              byte_offset, byte_size));
+                ++skinned_draw_count;
+            } else if (!frustum.intersects(mesh->bounds.transformed(draws[d].transform))) {
+                // Off-screen static meshes still cast shadows into view.
+                item.in_view = false;
+                ++culled;
+            }
+            prepared[prepared_count++] = item;
+        }
+    }
+
+    // Records the geometry of one prepared draw. `lit` binds materials and
+    // pushes their factors; the shadow pass needs neither.
+    VkDescriptorSet bound_material = VK_NULL_HANDLE;
+    const auto record_draw = [&](const PreparedDraw& item, bool lit) {
+        const GpuMesh* mesh = item.mesh;
+        const MeshDraw& draw = draws[item.source];
+        const VkDeviceSize zero_offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertices.buffer, &zero_offset);
+        vkCmdBindIndexBuffer(cmd, mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        for (std::size_t i = 0; i < mesh->instances.size(); ++i) {
+            const asset::MeshInstance& instance = mesh->instances[i];
+            const asset::MeshPrimitive& primitive = mesh->primitives[instance.primitive_index];
+            MeshPushConstants push;
+            push.model = draw.transform * instance.transform;
+            push.skin_offset = item.skin_offset;
+            if (lit) {
+                const GpuMaterial* material = &state.default_material;
+                if (primitive.material_index >= 0 &&
+                    static_cast<std::size_t>(primitive.material_index) < mesh->materials.size()) {
+                    material =
+                        &mesh->materials[static_cast<std::size_t>(primitive.material_index)];
+                }
+                if (material->set != bound_material) {
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            state.pipeline.mesh_layout, 1, 1, &material->set, 0,
+                                            nullptr);
+                    bound_material = material->set;
+                }
+                push.base_color = {material->base_color_factor.x * draw.tint.x,
+                                   material->base_color_factor.y * draw.tint.y,
+                                   material->base_color_factor.z * draw.tint.z,
+                                   material->base_color_factor.w * draw.tint.w};
+                push.metallic_roughness = {material->metallic_factor, material->roughness_factor,
+                                           0.0f, 0.0f};
+            } else {
+                push.base_color = {};
+                push.metallic_roughness = {};
+            }
+            vkCmdPushConstants(cmd, state.pipeline.mesh_layout,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(push), &push);
+            vkCmdDrawIndexed(cmd, primitive.index_count, 1, primitive.first_index,
+                             primitive.vertex_offset, 0);
+        }
+    };
+
+    // ---- shadow pass: depth from the key light. Runs whenever the lit pass
+    // will, even with shadows disabled, so the map the fragment shader is
+    // bound to is always cleared and in the read-only layout.
+    std::uint32_t shadow_drawn = 0;
+    if (draw_count > 0) {
+        VkImageMemoryBarrier2 to_shadow{};
+        to_shadow.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        // Wait for the previous frame's sampling of the map to finish.
+        to_shadow.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        to_shadow.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        to_shadow.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        to_shadow.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        to_shadow.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // cleared; old contents unused
+        to_shadow.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        to_shadow.image = state.shadow.image;
+        to_shadow.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        to_shadow.subresourceRange.levelCount = 1;
+        to_shadow.subresourceRange.layerCount = 1;
+        VkDependencyInfo to_shadow_dep{};
+        to_shadow_dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        to_shadow_dep.imageMemoryBarrierCount = 1;
+        to_shadow_dep.pImageMemoryBarriers = &to_shadow;
+        vkCmdPipelineBarrier2(cmd, &to_shadow_dep);
+
+        VkRenderingAttachmentInfo shadow_attachment{};
+        shadow_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        shadow_attachment.imageView = state.shadow.view;
+        shadow_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        shadow_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        shadow_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        shadow_attachment.clearValue.depthStencil = {1.0f, 0}; // far: nothing occludes
+        VkRenderingInfo shadow_rendering{};
+        shadow_rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        shadow_rendering.renderArea.extent = {state.shadow.size, state.shadow.size};
+        shadow_rendering.layerCount = 1;
+        shadow_rendering.pDepthAttachment = &shadow_attachment;
+        vkCmdBeginRendering(cmd, &shadow_rendering);
+        set_flipped_viewport(cmd, state.shadow.size, state.shadow.size);
+        if (shadows) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    state.pipeline.mesh_layout, 0, 1,
+                                    &state.descriptors.shadow_sets[frame], 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    state.pipeline.mesh_layout, 2, 1,
+                                    &state.descriptors.skin_sets[frame], 0, nullptr);
+            VkPipeline bound_pipeline = VK_NULL_HANDLE;
+            for (std::uint32_t i = 0; i < prepared_count; ++i) {
+                const VkPipeline wanted = prepared[i].mesh->skinned
+                                              ? state.pipeline.shadow_skinned_mesh
+                                              : state.pipeline.shadow_mesh;
+                if (wanted != bound_pipeline) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wanted);
+                    bound_pipeline = wanted;
+                }
+                record_draw(prepared[i], false);
+                ++shadow_drawn;
+            }
+        }
+        vkCmdEndRendering(cmd);
+
+        VkImageMemoryBarrier2 to_sampled = to_shadow;
+        to_sampled.srcStageMask = to_shadow.dstStageMask;
+        to_sampled.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        to_sampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        to_sampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        to_sampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        to_sampled.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        VkDependencyInfo to_sampled_dep{};
+        to_sampled_dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        to_sampled_dep.imageMemoryBarrierCount = 1;
+        to_sampled_dep.pImageMemoryBarriers = &to_sampled;
+        vkCmdPipelineBarrier2(cmd, &to_sampled_dep);
+    }
+    state.status.last_shadow_draws = shadow_drawn;
+
+    // ---- lit pass. UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL (contents are cleared anyway).
     VkImageMemoryBarrier2 to_color{};
     to_color.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     to_color.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -284,146 +533,33 @@ void state_destroy(Renderer::State& state) {
     rendering_info.pDepthAttachment = &depth_attachment;
 
     vkCmdBeginRendering(cmd, &rendering_info);
-
-    // Negative viewport height flips Vulkan's Y-down clip space back to the
-    // engine's Y-up convention; front faces stay counter-clockwise.
-    VkViewport viewport{};
-    viewport.y = static_cast<float>(state.swapchain.extent.height);
-    viewport.width = static_cast<float>(state.swapchain.extent.width);
-    viewport.height = -static_cast<float>(state.swapchain.extent.height);
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.extent = state.swapchain.extent;
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    set_flipped_viewport(cmd, state.swapchain.extent.width, state.swapchain.extent.height);
 
     std::uint32_t drawn = 0;
-    std::uint32_t culled = 0;
     if (draw_count == 0) {
         // Bare renderer (renderer_smoke, pre-scene startup): the Week 4
         // triangle still proves the pipeline end to end.
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline.triangle);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     } else {
-        // Frame uniforms: camera + one directional light. The camera
-        // position falls out of the rigid inverse of the view matrix.
-        const Mat4 view_projection = camera.view_projection();
-        const Mat4 camera_world = camera.view.inverted_rigid();
-        const Vec3 light_direction = normalize(Vec3{0.4f, -1.0f, 0.3f});
-
-        FrameUniforms uniforms;
-        uniforms.view_projection = view_projection;
-        uniforms.camera_position = {camera_world.at(0, 3), camera_world.at(1, 3),
-                                    camera_world.at(2, 3), 0.0f};
-        uniforms.light_direction = {light_direction.x, light_direction.y, light_direction.z,
-                                    static_cast<float>(state.point_light_count)};
-        uniforms.light_color = {1.0f, 0.96f, 0.9f, 3.0f}; // warm key light, intensity in w
-        uniforms.ambient_color = {0.05f, 0.055f, 0.07f, 0.0f};
-        for (std::uint32_t l = 0; l < state.point_light_count; ++l) {
-            const PointLight& light = state.point_lights[l];
-            uniforms.point_position_radius[l] = {light.position.x, light.position.y,
-                                                 light.position.z, light.radius};
-            uniforms.point_color_intensity[l] = {light.color.x, light.color.y, light.color.z,
-                                                 light.intensity};
-        }
-        std::memcpy(state.descriptors.frame_ubo_mapped[frame], &uniforms, sizeof(uniforms));
-
-        const Frustum frustum = Frustum::from_view_projection(view_projection);
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline.mesh);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 state.pipeline.mesh_layout, 0, 1,
                                 &state.descriptors.frame_sets[frame], 0, nullptr);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 state.pipeline.mesh_layout, 2, 1,
                                 &state.descriptors.skin_sets[frame], 0, nullptr);
-
-        VkDescriptorSet bound_material = VK_NULL_HANDLE;
-        VkPipeline bound_pipeline = state.pipeline.mesh;
-        std::uint32_t skinned_draw_count = 0;
-        for (std::uint32_t d = 0; d < draw_count; ++d) {
-            const GpuMesh* mesh = mesh_registry_resolve(state.meshes, draws[d].mesh);
-            if (mesh == nullptr) {
-                continue; // stale handle; upload path already logged
-            }
-            if (!mesh->skinned &&
-                !frustum.intersects(mesh->bounds.transformed(draws[d].transform))) {
-                ++culled;
+        VkPipeline bound_pipeline = VK_NULL_HANDLE;
+        for (std::uint32_t i = 0; i < prepared_count; ++i) {
+            if (!prepared[i].in_view) {
                 continue;
             }
-
-            std::uint32_t skin_offset = 0;
-            if (mesh->skinned) {
-                if (draws[d].joint_matrices == nullptr ||
-                    draws[d].joint_count != mesh->joint_count) {
-                    HUE_LOG_WARN("skinned draw has no valid %u-joint palette", mesh->joint_count);
-                    continue;
-                }
-                if (skinned_draw_count >= kMaxSkinnedDraws) {
-                    HUE_LOG_WARN("skinned draw cap reached (%u)", kMaxSkinnedDraws);
-                    continue;
-                }
-                skin_offset = skinned_draw_count * asset::kGltfMaxJoints;
-                const VkDeviceSize byte_offset =
-                    static_cast<VkDeviceSize>(skin_offset) * sizeof(Mat4);
-                const VkDeviceSize byte_size =
-                    static_cast<VkDeviceSize>(mesh->joint_count) * sizeof(Mat4);
-                auto* destination = static_cast<std::byte*>(
-                    state.descriptors.skin_buffer_mapped[frame]);
-                std::memcpy(destination + byte_offset, draws[d].joint_matrices,
-                            static_cast<std::size_t>(byte_size));
-                HUE_VK_TRY(vmaFlushAllocation(state.context.allocator,
-                                              state.descriptors.skin_buffers[frame].allocation,
-                                              byte_offset, byte_size));
-                ++skinned_draw_count;
+            const VkPipeline wanted =
+                prepared[i].mesh->skinned ? state.pipeline.skinned_mesh : state.pipeline.mesh;
+            if (wanted != bound_pipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wanted);
+                bound_pipeline = wanted;
             }
-
-            const VkPipeline wanted_pipeline =
-                mesh->skinned ? state.pipeline.skinned_mesh : state.pipeline.mesh;
-            if (wanted_pipeline != bound_pipeline) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wanted_pipeline);
-                bound_pipeline = wanted_pipeline;
-            }
-
-            const VkDeviceSize zero_offset = 0;
-            vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertices.buffer, &zero_offset);
-            vkCmdBindIndexBuffer(cmd, mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-
-            for (std::size_t i = 0; i < mesh->instances.size(); ++i) {
-                const asset::MeshInstance& instance = mesh->instances[i];
-                const asset::MeshPrimitive& primitive =
-                    mesh->primitives[instance.primitive_index];
-
-                const GpuMaterial* material = &state.default_material;
-                if (primitive.material_index >= 0 &&
-                    static_cast<std::size_t>(primitive.material_index) <
-                        mesh->materials.size()) {
-                    material = &mesh->materials[static_cast<std::size_t>(
-                        primitive.material_index)];
-                }
-                if (material->set != bound_material) {
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            state.pipeline.mesh_layout, 1, 1, &material->set, 0,
-                                            nullptr);
-                    bound_material = material->set;
-                }
-
-                MeshPushConstants push;
-                push.model = draws[d].transform * instance.transform;
-                push.base_color = {material->base_color_factor.x * draws[d].tint.x,
-                                   material->base_color_factor.y * draws[d].tint.y,
-                                   material->base_color_factor.z * draws[d].tint.z,
-                                   material->base_color_factor.w * draws[d].tint.w};
-                push.metallic_roughness = {material->metallic_factor,
-                                           material->roughness_factor, 0.0f, 0.0f};
-                push.skin_offset = skin_offset;
-                vkCmdPushConstants(cmd, state.pipeline.mesh_layout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                   sizeof(push), &push);
-                vkCmdDrawIndexed(cmd, primitive.index_count, 1, primitive.first_index,
-                                 primitive.vertex_offset, 0);
-            }
+            record_draw(prepared[i], true);
             ++drawn;
         }
     }
@@ -509,7 +645,12 @@ Result<Renderer> Renderer::create(Window& window, const RendererDesc& desc) {
     if (!depth) {
         return fail(depth.error());
     }
-    const auto descriptors = descriptors_create(state->descriptors, state->context);
+    const auto shadow = shadow_create(state->shadow, state->context, kShadowMapSize);
+    if (!shadow) {
+        return fail(shadow.error());
+    }
+    const auto descriptors =
+        descriptors_create(state->descriptors, state->context, state->shadow);
     if (!descriptors) {
         return fail(descriptors.error());
     }
@@ -532,6 +673,7 @@ Result<Renderer> Renderer::create(Window& window, const RendererDesc& desc) {
                  sizeof(state->status.adapter) - 1);
     state->status.swapchain_width = state->swapchain.extent.width;
     state->status.swapchain_height = state->swapchain.extent.height;
+    state->status.shadow_map_size = state->shadow.size;
 
     HUE_LOG_INFO("renderer initialized: %s, shaders at %s", state->status.adapter,
                  state->shader_directory);
@@ -578,6 +720,34 @@ void Renderer::set_point_lights(const PointLight* lights, std::uint32_t count) {
         m_state->point_lights[l] = lights[l];
     }
     m_state->point_light_count = count;
+}
+
+void Renderer::set_directional_light(const DirectionalLight& light) {
+    const auto finite = [](Vec3 v) {
+        return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+    };
+    const auto color = [&finite](Vec3 v) {
+        return finite(v) && v.x >= 0.0f && v.y >= 0.0f && v.z >= 0.0f && v.x <= 64.0f &&
+               v.y <= 64.0f && v.z <= 64.0f;
+    };
+    // Field by field: one bad value falls back to its default without
+    // discarding the rest, and nothing non-finite reaches a uniform buffer.
+    const DirectionalLight defaults;
+    DirectionalLight clean = light;
+    if (!finite(clean.direction) || length_squared(clean.direction) < 1.0e-8f)
+        clean.direction = defaults.direction;
+    if (!color(clean.color))
+        clean.color = defaults.color;
+    if (!std::isfinite(clean.intensity) || clean.intensity < 0.0f || clean.intensity > 64.0f)
+        clean.intensity = defaults.intensity;
+    if (!color(clean.ambient))
+        clean.ambient = defaults.ambient;
+    if (!finite(clean.shadow_center))
+        clean.shadow_center = defaults.shadow_center;
+    if (!std::isfinite(clean.shadow_radius) || clean.shadow_radius < 1.0f ||
+        clean.shadow_radius > 512.0f)
+        clean.shadow_radius = defaults.shadow_radius;
+    m_state->directional = clean;
 }
 
 Result<void> Renderer::draw_frame() {

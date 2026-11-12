@@ -36,6 +36,7 @@ add_executable(hue_tests
     core/test_string_id.cpp
     core/test_time.cpp
     render/test_spirv.cpp
+    render/test_shadow.cpp
     assets/test_gltf.cpp
 )
 # The no-exceptions flags propagate from hue_core, so run doctest in its

@@ -71,6 +71,16 @@ struct DepthState {
     VkExtent2D extent = {0, 0};
 };
 
+// The directional shadow map and its comparison sampler (shadow.cpp).
+struct ShadowState {
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkFormat format = VK_FORMAT_D32_SFLOAT;
+    std::uint32_t size = 0;
+};
+
 struct PipelineState {
     // Triangle (Week 4 bring-up, still drawn when the frame has no meshes).
     VkPipelineLayout triangle_layout = VK_NULL_HANDLE;
@@ -79,6 +89,10 @@ struct PipelineState {
     VkPipelineLayout mesh_layout = VK_NULL_HANDLE;
     VkPipeline mesh = VK_NULL_HANDLE;
     VkPipeline skinned_mesh = VK_NULL_HANDLE;
+    // Depth-only variants for the shadow pass: the same vertex shaders, no
+    // fragment stage, no color attachment, slope-scaled depth bias.
+    VkPipeline shadow_mesh = VK_NULL_HANDLE;
+    VkPipeline shadow_skinned_mesh = VK_NULL_HANDLE;
     // Screen-space HUD quads (health bars): no vertex buffers, depth off.
     VkPipelineLayout hud_layout = VK_NULL_HANDLE;
     VkPipeline hud = VK_NULL_HANDLE;
@@ -121,9 +135,13 @@ struct FrameUniforms {
     Vec4 ambient_color;         // rgb, a unused
     Vec4 point_position_radius[kMaxPointLights]; // xyz position, w radius
     Vec4 point_color_intensity[kMaxPointLights]; // rgb color, a intensity
+    Mat4 light_view_projection; // world -> shadow-map clip space
+    Vec4 shadow_params;         // x enabled, y texel size, z normal offset (m)
 };
+static_assert(sizeof(FrameUniforms) == 336); // must match the GLSL block and spirv_contract
 
-// Descriptor plumbing: set 0 = frame UBO (one per frame in flight),
+// Descriptor plumbing: set 0 = frame UBO + shadow map (one per frame in
+// flight, plus a twin whose UBO carries the light's matrix for the shadow pass),
 // set 1 = material textures (allocated per material at mesh upload; sets
 // live until the pool dies at shutdown, meshes are never destroyed alone).
 struct DescriptorState {
@@ -134,6 +152,9 @@ struct DescriptorState {
     BufferAllocation frame_ubos[kFramesInFlight];
     void* frame_ubo_mapped[kFramesInFlight] = {};
     VkDescriptorSet frame_sets[kFramesInFlight] = {};
+    BufferAllocation shadow_ubos[kFramesInFlight];
+    void* shadow_ubo_mapped[kFramesInFlight] = {};
+    VkDescriptorSet shadow_sets[kFramesInFlight] = {};
     BufferAllocation skin_buffers[kFramesInFlight];
     void* skin_buffer_mapped[kFramesInFlight] = {};
     VkDescriptorSet skin_sets[kFramesInFlight] = {};
@@ -205,6 +226,10 @@ void swapchain_destroy(SwapchainState& swapchain, const ContextState& context);
 Result<void> depth_create(DepthState& depth, const ContextState& context, VkExtent2D extent);
 void depth_destroy(DepthState& depth, const ContextState& context);
 
+// shadow.cpp
+Result<void> shadow_create(ShadowState& shadow, const ContextState& context, std::uint32_t size);
+void shadow_destroy(ShadowState& shadow, const ContextState& context);
+
 // pipeline.cpp (set layouts are inputs: descriptors.cpp owns them)
 Result<void> pipeline_create(PipelineState& pipeline, const ContextState& context,
                              VkFormat color_format, VkFormat depth_format,
@@ -227,7 +252,8 @@ Result<VkSampler> sampler_cache_get(SamplerCache& cache, const ContextState& con
 void sampler_cache_destroy(SamplerCache& cache, const ContextState& context);
 
 // descriptors.cpp
-Result<void> descriptors_create(DescriptorState& descriptors, const ContextState& context);
+Result<void> descriptors_create(DescriptorState& descriptors, const ContextState& context,
+                                const ShadowState& shadow);
 void descriptors_destroy(DescriptorState& descriptors, const ContextState& context);
 Result<VkDescriptorSet> material_set_allocate(DescriptorState& descriptors,
                                               const ContextState& context, VkImageView base_color,

@@ -241,12 +241,14 @@ void render_status_command(void* user_data, const hue::DebugCommandLine& command
     response.append_json_string(status.adapter);
     response.append_format(",\"swapchain\":[%u,%u],\"frames_rendered\":%llu,"
                            "\"last_draws\":%u,\"last_culled\":%u,\"pipelines\":%u,\"layouts\":%u,"
-                           "\"modules\":%u,\"generation\":%llu}",
+                           "\"modules\":%u,\"generation\":%llu,\"shadow_map\":%u,"
+                           "\"shadow_draws\":%u}",
                            status.swapchain_width, status.swapchain_height,
                            static_cast<unsigned long long>(status.frames_rendered),
                            status.last_draws, status.last_culled, status.live_pipelines,
                            status.live_layouts, status.live_shader_modules,
-                           static_cast<unsigned long long>(status.shader_generation));
+                           static_cast<unsigned long long>(status.shader_generation),
+                           status.shadow_map_size, status.last_shadow_draws);
 }
 
 // Runtime recompile hook: recompile .spv externally (build, or glslang by
@@ -776,6 +778,16 @@ int main(int argc, char** argv) {
                 lights[l] = {scene.lights[l].position, scene.lights[l].radius,
                              scene.lights[l].color, scene.lights[l].intensity};
             renderer.value().set_point_lights(lights, scene.light_count);
+            hue::DirectionalLight sun;
+            sun.direction = scene.sun_direction;
+            sun.color = scene.sun_color;
+            sun.intensity = scene.sun_intensity;
+            sun.ambient = scene.ambient;
+            sun.cast_shadows = scene.shadows;
+            // One map over the fighting area; ground beyond it is simply lit.
+            sun.shadow_center = {0.0f, 0.0f, 0.0f};
+            sun.shadow_radius = 16.0f;
+            renderer.value().set_directional_light(sun);
         }
         HUE_LOG_INFO("scene applied: %u actors, %u props, %u lights", scene.actor_count,
                      scene.prop_count, scene.light_count);

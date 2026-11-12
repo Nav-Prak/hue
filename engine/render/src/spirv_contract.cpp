@@ -59,7 +59,8 @@ struct Reflection {
         return is(length, spv::OpConstant, 4) && node(length)[3] == 4;
     }
     bool frame(std::uint32_t id) const {
-        if (!is(id, spv::OpTypeStruct, 9) || !ids[id].block)
+        // Nine members: see FrameUniforms in vk_types.h (336 bytes, std140).
+        if (!is(id, spv::OpTypeStruct, 11) || !ids[id].block)
             return false;
         const auto* n = node(id);
         if (!matrix(n[2]) || !mat_member(id, 0) || !member(id, 0, spv::DecorationOffset, 0))
@@ -68,7 +69,9 @@ struct Reflection {
             if (!vector(n[2 + i], 4) || !member(id, i, spv::DecorationOffset, 64 + (i - 1) * 16))
                 return false;
         return array4(n[7]) && array4(n[8]) && member(id, 5, spv::DecorationOffset, 128) &&
-               member(id, 6, spv::DecorationOffset, 192);
+               member(id, 6, spv::DecorationOffset, 192) && matrix(n[9]) && mat_member(id, 7) &&
+               member(id, 7, spv::DecorationOffset, 256) && vector(n[10], 4) &&
+               member(id, 8, spv::DecorationOffset, 320);
     }
     bool skin(std::uint32_t id) const {
         if (!is(id, spv::OpTypeStruct, 3) || !ids[id].block ||
@@ -78,15 +81,17 @@ struct Reflection {
         const auto a = node(id)[2];
         return is(a, spv::OpTypeRuntimeArray, 3) && ids[a].stride == 64 && matrix(node(a)[2]);
     }
-    bool sampler(std::uint32_t id) const {
+    // 2D, non-arrayed, single-sample sampled image; `depth` selects between a
+    // color texture (sampler2D) and a depth-comparison one (sampler2DShadow).
+    bool sampler(std::uint32_t id, unsigned depth = 0) const {
         if (!is(id, spv::OpTypeSampledImage, 3))
             return false;
         const auto a = node(id)[2];
         if (!is(a, spv::OpTypeImage, 9))
             return false;
         const auto* n = node(a);
-        return scalar(n[2]) && n[3] == 1 && n[4] == 0 && n[5] == 0 && n[6] == 0 && n[7] == 1 &&
-               n[8] == 0;
+        return scalar(n[2]) && n[3] == 1 && n[4] == depth && n[5] == 0 && n[6] == 0 &&
+               n[7] == 1 && n[8] == 0;
     }
     bool push(std::uint32_t id, bool hud, bool fragment) const {
         if (!is(id, spv::OpTypeStruct, hud ? 6 : fragment ? 5 : 6) || !ids[id].block)
@@ -289,6 +294,10 @@ Result<void> validate_shader_contract(const void* bytes, std::size_t size,
             if (d.set == 1 && d.binding < 2 && storage_class == spv::StorageClassUniformConstant &&
                 mesh_f && r.sampler(type))
                 bit = 2u << d.binding;
+            // The shadow map: only the mesh fragment shader may sample it.
+            if (d.set == 0 && d.binding == 1 && storage_class == spv::StorageClassUniformConstant &&
+                mesh_f && r.sampler(type, 1))
+                bit = 16;
             if (d.set == 2 && d.binding == 0 && storage_class == spv::StorageClassStorageBuffer &&
                 skin_v && r.skin(type))
                 bit = 8;
@@ -302,7 +311,7 @@ Result<void> validate_shader_contract(const void* bytes, std::size_t size,
                                  : (tri_f || hud_f)   ? 1u
                                                       : 0u;
     const unsigned expected_out = (mesh_v || skin_v) ? 7u : 1u;
-    const unsigned expected_descriptors = skin_v ? 9u : mesh_v ? 1u : mesh_f ? 7u : 0u;
+    const unsigned expected_descriptors = skin_v ? 9u : mesh_v ? 1u : mesh_f ? 23u : 0u;
     const unsigned expected_push = (mesh_v || skin_v || mesh_f || hud_v) ? 1u : 0u;
     if (inputs != expected_in || outputs != expected_out || descriptors != expected_descriptors ||
         pushes != expected_push)

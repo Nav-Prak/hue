@@ -8,6 +8,8 @@ layout(set = 0, binding = 0) uniform FrameUniforms {
     vec4 ambient_color;
     vec4 point_position_radius[4];
     vec4 point_color_intensity[4];
+    mat4 light_view_projection; // world -> shadow-map clip space
+    vec4 shadow_params;         // x enabled, y texel size, z normal offset (m)
 } u_frame;
 
 layout(set = 2, binding = 0, std430) readonly buffer SkinningMatrices {

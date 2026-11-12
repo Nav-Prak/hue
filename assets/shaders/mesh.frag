@@ -4,7 +4,8 @@
 // light plus up to 4 point lights with windowed inverse-square falloff,
 // plus flat ambient. The swapchain is sRGB, so everything here stays
 // linear and the hardware encodes on store. Per glTF, metallic samples
-// from the B channel and roughness from G.
+// from the B channel and roughness from G. The key light is attenuated by
+// one directional shadow map (3x3 PCF over hardware depth comparison).
 
 layout(set = 0, binding = 0) uniform FrameUniforms {
     mat4 view_projection;
@@ -14,7 +15,11 @@ layout(set = 0, binding = 0) uniform FrameUniforms {
     vec4 ambient_color;
     vec4 point_position_radius[4];
     vec4 point_color_intensity[4];
+    mat4 light_view_projection; // world -> shadow-map clip space
+    vec4 shadow_params;         // x enabled, y texel size, z normal offset (m)
 } u_frame;
+
+layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow_map;
 
 layout(set = 1, binding = 0) uniform sampler2D u_base_color;
 layout(set = 1, binding = 1) uniform sampler2D u_metallic_roughness;
@@ -71,6 +76,33 @@ vec3 shade(vec3 normal, vec3 view, vec3 light, vec3 radiance, vec3 albedo, float
     return (diffuse_weight * albedo / kPi + specular) * radiance * n_dot_l;
 }
 
+// Fraction of the key light reaching this point: 1 lit, 0 fully shadowed.
+// Anything outside the shadow map's box is treated as lit.
+float key_light_visibility(vec3 world_position, vec3 normal) {
+    if (u_frame.shadow_params.x < 0.5) {
+        return 1.0;
+    }
+    // Offset along the normal so a surface does not shadow itself.
+    vec3 biased = world_position + normal * u_frame.shadow_params.z;
+    vec4 clip = u_frame.light_view_projection * vec4(biased, 1.0);
+    vec3 ndc = clip.xyz / clip.w;
+    // The shadow pass renders through the same Y-flipped viewport as the
+    // main pass, so NDC +Y is the top row of the map.
+    vec2 uv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || ndc.z <= 0.0 ||
+        ndc.z >= 1.0) {
+        return 1.0;
+    }
+    float texel = u_frame.shadow_params.y;
+    float lit = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            lit += texture(u_shadow_map, vec3(uv + vec2(float(x), float(y)) * texel, ndc.z));
+        }
+    }
+    return lit / 9.0;
+}
+
 void main() {
     vec4 base = texture(u_base_color, v_uv) * pc.base_color;
     vec3 albedo = base.rgb;
@@ -86,7 +118,8 @@ void main() {
     vec3 key_direction = normalize(-u_frame.light_direction.xyz);
     vec3 key_radiance = u_frame.light_color.rgb * u_frame.light_color.a;
     vec3 color = shade(normal, view, key_direction, key_radiance, albedo, metallic, roughness,
-                       f0);
+                       f0) *
+                 key_light_visibility(v_world_position, normal);
 
     // Point lights: inverse-square falloff inside a windowed radius so a
     // light's influence reaches exactly zero at its bounding sphere.

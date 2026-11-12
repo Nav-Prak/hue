@@ -37,6 +37,8 @@ struct RendererStatus {
     std::uint32_t last_culled = 0; // draw items rejected by the frustum
     std::uint32_t live_pipelines = 0, live_layouts = 0, live_shader_modules = 0;
     std::uint64_t shader_generation = 0;
+    std::uint32_t shadow_map_size = 0;   // texels per side; 0 without a renderer
+    std::uint32_t last_shadow_draws = 0; // draw items rendered into the shadow map
 };
 
 // One instance of an uploaded mesh in the frame's draw list.
@@ -75,6 +77,28 @@ struct PointLight {
     float intensity = 1.0f;
 };
 
+// The one directional key light, plus flat ambient. When cast_shadows is set
+// it renders a single shadow map covering a sphere of shadow_radius around
+// shadow_center; anything outside that sphere is simply lit.
+struct DirectionalLight {
+    Vec3 direction{0.4f, -1.0f, 0.3f}; // direction the light travels
+    Vec3 color{1.0f, 0.96f, 0.9f};
+    float intensity = 3.0f;
+    Vec3 ambient{0.05f, 0.055f, 0.07f};
+    bool cast_shadows = true;
+    Vec3 shadow_center{};
+    float shadow_radius = 16.0f;
+};
+
+inline constexpr std::uint32_t kShadowMapSize = 2048;
+inline constexpr std::uint32_t kMaxFrameDraws = 256;
+
+// World -> shadow clip space for a directional light: an orthographic box
+// looking along `direction` at `center`, sized to hold a sphere of `radius`.
+// Pure and total: a zero, vertical or non-finite direction, or a non-positive
+// or non-finite radius, falls back to a safe value instead of producing NaNs.
+[[nodiscard]] Mat4 directional_shadow_matrix(Vec3 direction, Vec3 center, float radius) noexcept;
+
 class Renderer {
 public:
     // Fails with kUnsupported when no Vulkan 1.3 device is available (no
@@ -94,12 +118,16 @@ public:
     [[nodiscard]] Result<MeshHandle> upload_skinned_mesh(const asset::SkinnedMeshData& mesh);
 
     // Replaces the frame's point lights (up to kMaxPointLights; extras are
-    // dropped with a log). The directional key light stays engine-managed
-    // until the lighting pass grows in Week 16.
+    // dropped with a log).
     void set_point_lights(const PointLight* lights, std::uint32_t count);
+    // Replaces the key light. Non-finite or out-of-range values are replaced
+    // by the defaults rather than reaching the GPU.
+    void set_directional_light(const DirectionalLight& light);
 
-    // Records and submits one frame: draw items are frustum-culled against
-    // their mesh bounds, depth-tested, and lit by the mesh pipeline. With
+    // Records and submits one frame: every draw item first renders depth into
+    // the shadow map, then items are frustum-culled against their mesh
+    // bounds, depth-tested, and lit by the mesh pipeline. At most
+    // kMaxFrameDraws items are used; extras are dropped with a log. With
     // an empty list the Week 4 triangle draws instead, so a bare renderer
     // still proves the swapchain works. Swapchain recreation on resize/
     // out-of-date is handled internally; a minimized window is a no-op.
