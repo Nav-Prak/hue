@@ -40,6 +40,26 @@ def statistics(log):
     return result
 
 
+# libFuzzer prints its statistics and runs the leak check after the time
+# budget; a large corpus needs more than a few seconds for that.
+EXIT_GRACE_SECONDS = 300
+SANITIZER_MARKERS = (b"runtime error:", b"ERROR: AddressSanitizer", b"ERROR: LeakSanitizer",
+                     b"SUMMARY: UndefinedBehaviorSanitizer")
+
+
+def sanitizer_reports(log, limit=8):
+    # UBSan reports do not stop the fuzzer by default and leave no artifact,
+    # so a zero exit code alone does not mean a clean slice.
+    found = []
+    with log.open("rb") as stream:
+        for line in stream:
+            if any(marker in line for marker in SANITIZER_MARKERS):
+                found.append(line.decode("utf-8", errors="replace").strip()[:300])
+                if len(found) == limit:
+                    break
+    return found
+
+
 def initialize(binary_dir, output, seconds, resume):
     if not len(TARGETS) <= seconds <= 172800:
         raise ValueError("budget must be 6..172800 seconds across all targets")
@@ -107,14 +127,24 @@ def run_campaign(binary_dir, output, seconds, slice_seconds, resume=False):
             try:
                 with log.open("xb") as stream:
                     completed = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT,
-                                               timeout=duration + 30, check=False)
+                                               timeout=duration + EXIT_GRACE_SECONDS, check=False)
                 record["returncode"] = completed.returncode
                 record["status"] = "passed" if completed.returncode == 0 else "failed"
             except KeyboardInterrupt:
                 record["status"] = "interrupted"
-            except (OSError, subprocess.TimeoutExpired) as error:
+            except subprocess.TimeoutExpired:
+                record["status"] = "failed"
+                record["error"] = (f"harness did not exit within {EXIT_GRACE_SECONDS}s of its "
+                                   "time budget; this is a runner timeout, not a saved finding")
+            except OSError as error:
                 record["status"] = "failed"
                 record["error"] = str(error)
+            reports = sanitizer_reports(log) if log.exists() else []
+            if reports:
+                record["sanitizer_reports"] = reports
+                if record["status"] == "passed":
+                    record["status"] = "failed"
+                    record["error"] = "sanitizer report in the log without a nonzero exit"
             record["elapsed_seconds"] = time.monotonic() - start
             record["statistics"] = statistics(log) if log.exists() else {}
             elapsed += record["elapsed_seconds"]

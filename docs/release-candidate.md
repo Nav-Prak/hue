@@ -179,9 +179,11 @@ Release), all from commit `b928e6d`:
 
 Not done: gamepad checks of target switching, any balance work for multi-enemy
 fights (the shipped tuning was made for one enemy). The sustained fuzz
-campaign, now six targets, was started on November 11 and had not finished
-when this was written; [its run log](fuzz-campaign.md#run-log) says what has
-been observed. The owner-waived and deferred items above are otherwise
+campaign, now six targets, has not completed. The first attempt stopped after
+11 of 24 hours on a runner timeout and, on inspection, had logged undefined
+behaviour in cgltf on misaligned glTF accessors; the loader now rejects those
+files and a second campaign was started on November 12.
+[Its run log](fuzz-campaign.md#run-log) says what has been observed. The owner-waived and deferred items above are otherwise
 unchanged.
 
 ## Reproduce and review

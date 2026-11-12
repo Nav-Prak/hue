@@ -60,6 +60,25 @@ class CampaignTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "triage"):
             campaign.initialize(self.binary, self.output, 50, True)
 
+    def test_sanitizer_report_with_zero_exit_fails_the_slice(self):
+        def noisy(command, **kwargs):
+            kwargs["stdout"].write(b"cgltf.h:2195:11: runtime error: load of misaligned address\n")
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(campaign.subprocess, "run", side_effect=noisy), patch.object(campaign.time, "monotonic", side_effect=[0, 1]):
+            self.assertEqual(campaign.run_campaign(self.binary, self.output, 50, 10), 1)
+        state = json.loads((self.output / "campaign.json").read_text())
+        self.assertEqual(state["status"], "failed")
+        self.assertIn("runtime error", state["runs"][0]["sanitizer_reports"][0])
+
+    def test_exit_overrun_is_reported_as_a_runner_timeout(self):
+        def hang(command, **kwargs):
+            self.assertEqual(kwargs["timeout"], 10 + campaign.EXIT_GRACE_SECONDS)
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        with patch.object(campaign.subprocess, "run", side_effect=hang), patch.object(campaign.time, "monotonic", side_effect=[0, 1]):
+            self.assertEqual(campaign.run_campaign(self.binary, self.output, 60, 10), 1)
+        state = json.loads((self.output / "campaign.json").read_text())
+        self.assertIn("runner timeout", state["runs"][0]["error"])
+
     def test_pause_resume_preserves_time_and_generated_corpus(self):
         with patch.object(campaign.subprocess, "run", side_effect=KeyboardInterrupt), patch.object(campaign.time, "monotonic", side_effect=[0, 1]):
             self.assertEqual(campaign.run_campaign(self.binary, self.output, 50, 10), 130)

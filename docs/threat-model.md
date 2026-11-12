@@ -47,7 +47,12 @@ Defenses, in order:
 2. **Memory-only parse** — `cgltf_parse` + `cgltf_load_buffers(..., nullptr)`.
    Embedded GLB BIN chunks and data URIs resolve; external `.bin` / HTTP
    URIs are rejected (`kUnsupported`) so the fuzz target never touches disk.
-3. **`cgltf_validate`** — accessor offsets and counts checked against
+3. **Component alignment** — every accessor's resolved data address and
+   stride must be a multiple of its component size, as glTF requires. cgltf
+   reads components through cast pointers, so a misaligned accessor was
+   undefined behaviour inside it; the November 2026 fuzz campaign found this
+   through UBSan. Such files are rejected before validation or any read.
+   **`cgltf_validate`** then checks accessor offsets and counts against
    buffer sizes before we read a single attribute.
 4. **Format allow-list** — triangles only; float32 positions/normals/UVs;
    no sparse accessors; unknown topology → `kUnsupported`.

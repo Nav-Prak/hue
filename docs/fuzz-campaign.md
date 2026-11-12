@@ -38,7 +38,12 @@ two workers from sharing an output. A hard kill leaves a running record/lock:
 inspect the process and artifacts and start a fresh output rather than deleting
 evidence or pretending the interrupted time was measured.
 
-A sanitizer finding, crash, timeout or nonzero exit stops the campaign. Triage
+A sanitizer finding, crash, timeout or nonzero exit stops the campaign. So does
+a sanitizer report in a slice's log even when the harness exits zero: UBSan
+reports do not stop libFuzzer and leave no artifact, so an empty `artifacts/`
+directory alone is not a clean result. A harness that has not exited 300
+seconds after its time budget is stopped and recorded as a runner timeout.
+Triage
 the saved input, add a regression, rebuild, and start a fresh campaign directory;
 failed campaigns cannot be resumed into a misleading clean result. `completed`
 means the requested budget was consumed, not that security is proven. Review
@@ -62,17 +67,44 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
   events 1,581,885; scene 1,095,427; tuning 1,357,981; shader contract 4,140;
   WAV 291,697 (six seconds). This checks the plumbing and is far too short to
   say anything about the parsers.
-- 24-hour campaign (`--seconds 86400 --slice-seconds 900`, output
-  `~/hue-campaign-24h`, console log `~/hue-campaign-24h.log`): **started, not
-  finished.** No result is claimed here. The budget is shared: each target
-  gets about four hours, not twenty-four. The run pauses if the PC sleeps and
-  dies if WSL or Windows restarts; a hard stop leaves the lock file and a
-  `running` record and needs a fresh output directory, as described above.
+- First 24-hour attempt (`--seconds 86400 --slice-seconds 900`, output
+  `~/hue-campaign-24h`): **stopped at 11.0 of 24 hours, status `failed`, with
+  one finding.** It is not acceptance evidence.
+  - *Why it stopped.* Slice 43 (glTF) had not exited 30 seconds after its
+    900-second budget and the runner killed it. No crash, no artifact. Every
+    slice had been taking 922 to 930 seconds, so the 30-second allowance was
+    too small from the start; it is now 300 seconds.
+  - *Finding.* All eight glTF slice logs contain the same four UBSan reports
+    ("load of misaligned address") inside cgltf, at `cgltf.h` lines 1544,
+    2195, 2207 and 2410. cgltf reads 16- and 32-bit components and floats by
+    casting a byte pointer, and mutated files placed accessor data off its
+    component alignment, which glTF forbids. UBSan reports do not stop
+    libFuzzer, so the slices exited zero, saved no artifact, and the runner
+    recorded them as passed. On x86-64 the reads return the expected bytes;
+    it is still undefined behaviour reached from untrusted input.
+  - *Fix.* The loader now rejects a file whose accessor (or sparse accessor)
+    data address or stride is not a multiple of its component size, before
+    `cgltf_validate` or any read. A doctest covers four misaligned layouts.
+    Replaying the stopped run's 2,288-file glTF corpus reproduces the four
+    reports with the old harness and none with the patched one. The runner
+    now fails a slice whose log holds a sanitizer report.
+  - *What the 42 completed slices did.* Executions: glTF 6.35 million (2.05
+    h), animation events 671 million, scene 754 million, tuning 1,078
+    million, shader contract 0.80 million, WAV 156 million (1.8 h each). No
+    ASan report, crash, timeout or artifact in any target, and no sanitizer
+    report outside glTF.
+- Second 24-hour campaign, from the commit that contains the fix (output
+  `~/hue-campaign2-24h`, console log `~/hue-campaign2-24h.log`): **started
+  November 12, not finished.** No result is claimed here. The budget is
+  shared: each target gets about four hours, not twenty-four. The run pauses
+  if the PC sleeps and dies if WSL or Windows restarts; a hard stop leaves the
+  lock file and a `running` record and needs a fresh output directory, as
+  described above.
 
 Check progress from Windows:
 
 ```sh
-wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign-24h.log; ls ~/hue-campaign-24h/artifacts/*"
+wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign2-24h.log; ls ~/hue-campaign2-24h/artifacts/*"
 ```
 
 When it ends, `campaign.json` holds the status, per-slice times and libFuzzer

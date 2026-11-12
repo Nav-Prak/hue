@@ -21,6 +21,7 @@
 #include <stb_image.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -50,8 +51,57 @@ struct DataGuard {
     }
 };
 
+// cgltf reads multi-byte components by casting the byte pointer, so an
+// accessor whose data does not sit on a multiple of its component size is
+// undefined behaviour inside cgltf (UBSan reports it on Linux; found by the
+// November 2026 fuzz campaign). glTF requires that alignment, so a file that
+// breaks it is rejected before cgltf_validate or any read touches the data.
+// The check uses the resolved address: it also covers a GLB whose JSON chunk
+// length is not a multiple of four.
+[[nodiscard]] bool component_aligned(const cgltf_buffer_view* view, cgltf_size offset,
+                                     cgltf_component_type component, cgltf_size stride) {
+    const cgltf_size size = cgltf_component_size(component);
+    if (view == nullptr || size <= 1) {
+        return true;
+    }
+    const void* base = view->data;
+    cgltf_size view_offset = 0;
+    if (base == nullptr) {
+        if (view->buffer == nullptr || view->buffer->data == nullptr) {
+            return true; // nothing to read; cgltf returns zero elements
+        }
+        base = view->buffer->data;
+        view_offset = view->offset;
+    }
+    const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(base) +
+                                   static_cast<std::uintptr_t>(view_offset) +
+                                   static_cast<std::uintptr_t>(offset);
+    return address % size == 0 && stride % size == 0;
+}
+
+[[nodiscard]] bool accessors_aligned(const cgltf_data& data) {
+    for (cgltf_size i = 0; i < data.accessors_count; ++i) {
+        const cgltf_accessor& accessor = data.accessors[i];
+        if (!component_aligned(accessor.buffer_view, accessor.offset, accessor.component_type,
+                               accessor.stride)) {
+            return false;
+        }
+        if (accessor.is_sparse &&
+            (!component_aligned(accessor.sparse.indices_buffer_view,
+                                accessor.sparse.indices_byte_offset,
+                                accessor.sparse.indices_component_type, 0) ||
+             !component_aligned(accessor.sparse.values_buffer_view,
+                                accessor.sparse.values_byte_offset, accessor.component_type,
+                                0))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Shared front door: size cap, parse, embedded-only buffer resolve,
-// cgltf_validate. Every loader entry point funnels through here.
+// alignment check, cgltf_validate. Every loader entry point funnels through
+// here.
 [[nodiscard]] Result<void> parse_and_validate(DataGuard& guard, const void* bytes,
                                               std::size_t size) {
     if (bytes == nullptr || size == 0 || size > kGltfMaxFileBytes) {
@@ -69,6 +119,9 @@ struct DataGuard {
     // external files fail. The fuzz targets must never touch the disk.
     if (cgltf_load_buffers(&options, guard.data, nullptr) != cgltf_result_success) {
         return ErrorCode::kUnsupported;
+    }
+    if (!accessors_aligned(*guard.data)) {
+        return ErrorCode::kCorruptData;
     }
     if (cgltf_validate(guard.data) != cgltf_result_success) {
         return ErrorCode::kCorruptData;

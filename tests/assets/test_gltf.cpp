@@ -137,6 +137,72 @@ TEST_CASE("gltf: out-of-range index rejected") {
     CHECK(mesh.error() == ErrorCode::kCorruptData);
 }
 
+namespace {
+
+// Triangle whose position view, position stride and index view offsets are
+// chosen by the caller, to place components off their natural alignment.
+[[nodiscard]] GlbBuilder make_offset_triangle_glb(std::uint32_t position_offset,
+                                                  std::uint32_t position_stride,
+                                                  std::uint32_t index_offset) {
+    const float positions[9] = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    const std::uint32_t indices[3] = {0u, 1u, 2u};
+    std::uint8_t bin[128] = {};
+    for (std::uint32_t v = 0; v < 3; ++v) {
+        std::memcpy(bin + position_offset + v * position_stride, positions + v * 3u, 12);
+    }
+    std::memcpy(bin + index_offset, indices, sizeof(indices));
+    const std::uint32_t position_length = 2u * position_stride + 12u;
+
+    char json[1024];
+    const int length = std::snprintf(
+        json, sizeof(json),
+        "{\"asset\":{\"version\":\"2.0\"},"
+        "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+        "\"accessors\":["
+        "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+        "\"min\":[0,0,0],\"max\":[1,1,0]},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":["
+        "{\"buffer\":0,\"byteOffset\":%u,\"byteLength\":%u,\"byteStride\":%u},"
+        "{\"buffer\":0,\"byteOffset\":%u,\"byteLength\":12}],"
+        "\"buffers\":[{\"byteLength\":128}]}",
+        position_offset, position_length, position_stride, index_offset);
+    REQUIRE(length > 0);
+    REQUIRE(static_cast<std::size_t>(length) < sizeof(json));
+
+    GlbBuilder glb;
+    glb.finish(json, static_cast<std::size_t>(length), bin,
+               static_cast<std::uint32_t>(sizeof(bin)));
+    return glb;
+}
+
+} // namespace
+
+// Found by the November 2026 fuzz campaign: cgltf casts byte pointers to
+// wider types, so off-alignment accessor data was undefined behaviour.
+TEST_CASE("gltf: accessor data off its component alignment rejected") {
+    {
+        const GlbBuilder aligned = make_offset_triangle_glb(0, 16, 64);
+        CHECK(load_gltf(aligned.bytes.data(), aligned.bytes.size()).has_value());
+    }
+    const std::uint32_t cases[][3] = {
+        {1, 12, 64}, // float positions start on an odd byte
+        {0, 14, 64}, // stride walks the floats off alignment
+        {0, 12, 62}, // 32-bit indices start two bytes off
+        {0, 12, 65}, // 32-bit indices start on an odd byte
+    };
+    for (const auto& c : cases) {
+        CAPTURE(c[0]);
+        CAPTURE(c[1]);
+        CAPTURE(c[2]);
+        const GlbBuilder glb = make_offset_triangle_glb(c[0], c[1], c[2]);
+        const auto result = load_gltf(glb.bytes.data(), glb.bytes.size());
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error() == ErrorCode::kCorruptData);
+    }
+}
+
 TEST_CASE("gltf: truncated BIN chunk rejected") {
     // JSON claims 48 BIN bytes; we only supply 12 so cgltf_load_buffers
     // fails before validate (our loader surfaces that as kUnsupported).
