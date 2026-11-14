@@ -93,18 +93,30 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
     million, shader contract 0.80 million, WAV 156 million (1.8 h each). No
     ASan report, crash, timeout or artifact in any target, and no sanitizer
     report outside glTF.
-- Second 24-hour campaign, from the commit that contains the fix (output
-  `~/hue-campaign2-24h`, console log `~/hue-campaign2-24h.log`): **started
-  November 12, not finished.** No result is claimed here. The budget is
-  shared: each target gets about four hours, not twenty-four. The run pauses
-  if the PC sleeps and dies if WSL or Windows restarts; a hard stop leaves the
-  lock file and a `running` record and needs a fresh output directory, as
-  described above.
+- Second 24-hour attempt, revision `50fb994` with the fix (output
+  `~/hue-campaign2-24h`): **interrupted after 1.03 of 24 hours; not
+  acceptance evidence.** The WSL virtual machine powered off at 14:31 PST on
+  November 12, eight minutes into the fifth slice, and took the runner with
+  it. Windows itself stayed up; the `wsl.exe` that held the distribution open
+  had been started from inside the development tool's process tree and
+  evidently ended with it. The lock file and a `running` record remain, as
+  the procedure above expects. The four completed slices (glTF 0.79 million
+  executions, animation events 47.6 million, scene 85.5 million, tuning
+  129.4 million) passed with no artifact and no sanitizer report; the
+  partial shader-contract log has none either. WAV did not run.
+- Third 24-hour campaign, same clean clone at `50fb994` (output
+  `~/hue-campaign3-24h`, console log `~/hue-campaign3-24h.log`): **started
+  November 13, not finished.** No result is claimed here. Its `wsl.exe` was
+  created through WMI so that it does not belong to any tool's process tree.
+  The budget is shared: each target gets about four hours, not twenty-four.
+  The run pauses if the PC sleeps and dies if WSL (`wsl --shutdown`) or
+  Windows restarts; a hard stop leaves the lock file and a `running` record
+  and needs a fresh output directory, as described above.
 
 Check progress from Windows:
 
 ```sh
-wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign2-24h.log; ls ~/hue-campaign2-24h/artifacts/*"
+wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign3-24h.log; ls ~/hue-campaign3-24h/artifacts/*"
 ```
 
 When it ends, `campaign.json` holds the status, per-slice times and libFuzzer

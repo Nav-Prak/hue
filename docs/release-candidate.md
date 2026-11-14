@@ -182,7 +182,8 @@ fights (the shipped tuning was made for one enemy). The sustained fuzz
 campaign, now six targets, has not completed. The first attempt stopped after
 11 of 24 hours on a runner timeout and, on inspection, had logged undefined
 behaviour in cgltf on misaligned glTF accessors; the loader now rejects those
-files and a second campaign was started on November 12.
+files. A second attempt was cut short after one hour when the WSL virtual
+machine shut down; a third was started on November 13.
 [Its run log](fuzz-campaign.md#run-log) says what has been observed. The owner-waived and deferred items above are otherwise
 unchanged.
 
