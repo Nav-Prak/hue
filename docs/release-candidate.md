@@ -185,7 +185,9 @@ behaviour in cgltf on misaligned glTF accessors; the loader now rejects those
 files. A second attempt was cut short after one hour when the WSL virtual
 machine shut down. A third stopped at 3.4 hours on a second finding, a
 zero-length `memcpy` with a null pointer inside stb_image, now also fixed. A
-fourth was started on November 14.
+fourth stopped at 5.6 hours on a false timeout caused by the WSL clock
+stepping backwards, with no parser finding; the runner now verifies and
+records that case. A fifth was started on November 15.
 [Its run log](fuzz-campaign.md#run-log) says what has been observed. The owner-waived and deferred items above are otherwise
 unchanged.
 

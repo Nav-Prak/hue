@@ -43,6 +43,18 @@ a sanitizer report in a slice's log even when the harness exits zero: UBSan
 reports do not stop libFuzzer and leave no artifact, so an empty `artifacts/`
 directory alone is not a clean result. A harness that has not exited 300
 seconds after its time budget is stopped and recorded as a runner timeout.
+
+One case does not stop the campaign. libFuzzer times units with the wall
+clock, and a virtual machine's clock can be stepped backwards by its host.
+libFuzzer then measures a negative duration and either reports a timeout
+"after 18446744073709551615 seconds" or exits at once believing its budget is
+spent. The runner records such a slice as `clock_step`, never as passed. For
+the timeout form it does so only if that exact message is present, no
+sanitizer report is, and the single saved input replays through the harness
+with a zero exit in under ten seconds; the input then moves to
+`clock-step/<target>/` and the replay log is kept. Anything else is still a
+failure. A completed campaign must list its `clock_step` slices beside its
+result.
 Triage
 the saved input, add a regression, rebuild, and start a fresh campaign directory;
 failed campaigns cannot be resumed into a misleading clean result. `completed`
@@ -130,9 +142,32 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
     million, WAV 60 million. No ASan report, crash, timeout or artifact in
     any target, no misaligned-load report, and no sanitizer report outside
     that glTF slice.
-- Fourth 24-hour campaign, from the commit that contains the stb_image fix
-  (clean clone `~/hue-campaign4`, output `~/hue-campaign4-24h`, console log
-  `~/hue-campaign4-24h.log`): **started November 14, not finished.** No
+- Fourth 24-hour attempt, revision `27fd18e` with the stb_image fix (output
+  `~/hue-campaign4-24h`, started November 15): **stopped by the runner at
+  5.61 of 24 hours, status `failed`; no parser finding.** It is not
+  acceptance evidence.
+  - *Why it stopped.* Slice 23 (shader contract) ended after 312 seconds
+    with a libFuzzer timeout "after 18446744073709551615 seconds" ("working
+    on the last Unit for -1 seconds") and a saved `timeout-` input. That is a
+    negative duration: the WSL clock was stepped backwards under libFuzzer.
+    The saved input replays through the same harness in 0.14 seconds with a
+    zero exit and no sanitizer report.
+  - *A second clock step.* Slice 5 (shader contract) exited zero after 0.4
+    seconds and eight executions, printing "Done 8 runs in -1 second(s)",
+    and was recorded as passed. Its log's modification time is a second
+    earlier than the previous slice's. It did no fuzzing worth counting.
+  - *Runner change.* Both forms are now recorded as `clock_step` under the
+    rule above, and the campaign continues. Run against the real logs of
+    this attempt, the new check classifies both slices and replays the saved
+    input in 0.2 seconds.
+  - *What the other 21 slices did.* Executions: glTF 3.05 million,
+    animation events 287 million, scene 371 million, tuning 530 million,
+    shader contract 0.25 million, WAV 117 million (about one hour each,
+    shader contract 0.5 h). No sanitizer report, crash or artifact in any
+    target; neither earlier finding recurred.
+- Fifth 24-hour campaign, from the commit with the runner change (clean
+  clone `~/hue-campaign5`, output `~/hue-campaign5-24h`, console log
+  `~/hue-campaign5-24h.log`): **started November 15, not finished.** No
   result is claimed here. Started through WMI like the third.
   The budget is shared: each target gets about four hours, not twenty-four.
   The run pauses if the PC sleeps and dies if WSL (`wsl --shutdown`) or
@@ -142,7 +177,7 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
 Check progress from Windows:
 
 ```sh
-wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign4-24h.log; ls ~/hue-campaign4-24h/artifacts/*"
+wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign5-24h.log; ls ~/hue-campaign5-24h/artifacts/*"
 ```
 
 When it ends, `campaign.json` holds the status, per-slice times and libFuzzer

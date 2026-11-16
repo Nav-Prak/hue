@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
@@ -58,6 +59,61 @@ def sanitizer_reports(log, limit=8):
                 if len(found) == limit:
                     break
     return found
+
+
+# libFuzzer times units and its total budget with the wall clock. When that
+# clock is stepped backwards (a virtual machine resynchronising with its
+# host), it measures a negative duration: either it reports a timeout "after
+# 18446744073709551615 seconds" or it believes its budget is spent and exits
+# at once. Neither says anything about the input.
+NEGATIVE_TIMEOUT = b"libFuzzer: timeout after 18446744073709551615 seconds"
+NEGATIVE_DONE = re.compile(rb"Done \d+ runs in -\d+ second")
+WRITTEN = re.compile(rb"Test unit written to (\S+)")
+
+
+def log_tail(log, size=1 << 20):
+    with log.open("rb") as stream:
+        stream.seek(max(0, log.stat().st_size - size))
+        return stream.read()
+
+
+def clock_step(output, target, binary, log, record):
+    """Returns a description when a slice ended only because the wall clock
+    went backwards, after proving the saved input is not slow; else None."""
+    if record.get("sanitizer_reports"):
+        return None
+    tail = log_tail(log)
+    if record["status"] == "passed":
+        return "libFuzzer measured a negative run time and exited early" if NEGATIVE_DONE.search(tail) else None
+    if record.get("returncode") in (None, 0) or NEGATIVE_TIMEOUT not in tail:
+        return None
+    written = WRITTEN.findall(tail)
+    directory = (output / "artifacts" / target).resolve()
+    if len(written) != 1:
+        return None
+    artifact = Path(os.fsdecode(written[0])).resolve()
+    if artifact.parent != directory or not artifact.name.startswith("timeout-") or not artifact.is_file():
+        return None
+    if sorted(directory.iterdir()) != [artifact]:
+        return None
+    replay = log.with_suffix(".replay.log")
+    start = time.monotonic()
+    try:
+        with replay.open("xb") as stream:
+            completed = subprocess.run([binary, "-timeout=10", "-rss_limit_mb=2048", str(artifact)],
+                                       stdout=stream, stderr=subprocess.STDOUT, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    seconds = time.monotonic() - start
+    if completed.returncode != 0 or seconds >= 10 or sanitizer_reports(replay):
+        return None
+    kept = output / "clock-step" / target
+    kept.mkdir(parents=True, exist_ok=True)
+    artifact.replace(kept / artifact.name)
+    record["replay_seconds"] = seconds
+    record["replay_log"] = str(replay.relative_to(output))
+    return ("libFuzzer reported a timeout with a negative duration; the saved input replayed "
+            f"cleanly in {seconds:.1f}s and was moved to clock-step/{target}/")
 
 
 def initialize(binary_dir, output, seconds, resume):
@@ -145,13 +201,20 @@ def run_campaign(binary_dir, output, seconds, slice_seconds, resume=False):
                 if record["status"] == "passed":
                     record["status"] = "failed"
                     record["error"] = "sanitizer report in the log without a nonzero exit"
+            stepped = clock_step(output, target, state["binaries"][target]["path"], log, record) if log.exists() else None
+            if stepped:
+                # Not a pass and not a finding: the time is counted, the slice
+                # is listed, and the campaign goes on.
+                record["status"] = "clock_step"
+                record["clock_step"] = stepped
+                record.pop("error", None)
             record["elapsed_seconds"] = time.monotonic() - start
             record["statistics"] = statistics(log) if log.exists() else {}
             elapsed += record["elapsed_seconds"]
             state["status"] = "failed" if record["status"] == "failed" else "paused"
             save(output, state)
             print(f"{target}: {record['status']}, {record['elapsed_seconds']:.1f}s", flush=True)
-            if record["status"] != "passed":
+            if record["status"] not in ("passed", "clock_step"):
                 return 130 if record["status"] == "interrupted" else 1
         state["status"] = "completed"
         save(output, state)

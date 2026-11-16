@@ -79,6 +79,60 @@ class CampaignTests(unittest.TestCase):
         state = json.loads((self.output / "campaign.json").read_text())
         self.assertIn("runner timeout", state["runs"][0]["error"])
 
+    def test_negative_duration_timeout_is_replayed_and_does_not_stop_the_campaign(self):
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            if len(command) == 4:  # the replay of the saved input
+                kwargs["stdout"].write(b"Executed in 140 ms\n")
+                return subprocess.CompletedProcess(command, 0)
+            if len(calls) == 1:
+                saved = Path(command[-1].split("=", 1)[1]) / "timeout-abc"
+                saved.write_bytes(b"input")
+                kwargs["stdout"].write(b"ALARM: working on the last Unit for -1 seconds\n"
+                                       b"Test unit written to " + str(saved).encode() + b"\n"
+                                       b"==1== ERROR: libFuzzer: timeout after 18446744073709551615 seconds\n")
+                return subprocess.CompletedProcess(command, 70)
+            return self.success(command, **kwargs)
+
+        with patch.object(campaign.subprocess, "run", side_effect=run), patch.object(campaign.time, "monotonic", side_effect=[0, 5, 5, 6, 6, 16, 16, 26, 26, 36, 36, 46, 46, 60]):
+            self.assertEqual(campaign.run_campaign(self.binary, self.output, 60, 10), 0)
+        state = json.loads((self.output / "campaign.json").read_text())
+        self.assertEqual(state["status"], "completed")
+        self.assertEqual(state["runs"][0]["status"], "clock_step")
+        self.assertNotIn("error", state["runs"][0])
+        first = next(iter(campaign.TARGETS))
+        self.assertTrue((self.output / "clock-step" / first / "timeout-abc").is_file())
+        self.assertEqual(list((self.output / "artifacts" / first).iterdir()), [])
+
+    def test_real_timeout_and_slow_replay_still_fail(self):
+        def run(command, **kwargs):
+            if len(command) == 4:
+                raise subprocess.TimeoutExpired(command, 60)
+            saved = Path(command[-1].split("=", 1)[1]) / "timeout-abc"
+            saved.write_bytes(b"input")
+            kwargs["stdout"].write(b"Test unit written to " + str(saved).encode() + b"\n"
+                                   b"==1== ERROR: libFuzzer: timeout after 18446744073709551615 seconds\n")
+            return subprocess.CompletedProcess(command, 70)
+
+        with patch.object(campaign.subprocess, "run", side_effect=run), patch.object(campaign.time, "monotonic", side_effect=[0, 5, 5]):
+            self.assertEqual(campaign.run_campaign(self.binary, self.output, 60, 10), 1)
+        state = json.loads((self.output / "campaign.json").read_text())
+        self.assertEqual(state["runs"][0]["status"], "failed")
+        first = next(iter(campaign.TARGETS))
+        self.assertTrue((self.output / "artifacts" / first / "timeout-abc").is_file())
+
+    def test_negative_run_time_exit_is_not_recorded_as_a_pass(self):
+        def run(command, **kwargs):
+            kwargs["stdout"].write(b"#8 DONE cov: 12 ft: 30\nDone 8 runs in -1 second(s)\n")
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(campaign.subprocess, "run", side_effect=run), patch.object(campaign.time, "monotonic", side_effect=[0, 60]):
+            self.assertEqual(campaign.run_campaign(self.binary, self.output, 60, 10), 0)
+        state = json.loads((self.output / "campaign.json").read_text())
+        self.assertEqual(state["runs"][0]["status"], "clock_step")
+
     def test_pause_resume_preserves_time_and_generated_corpus(self):
         with patch.object(campaign.subprocess, "run", side_effect=KeyboardInterrupt), patch.object(campaign.time, "monotonic", side_effect=[0, 1]):
             self.assertEqual(campaign.run_campaign(self.binary, self.output, 50, 10), 130)
