@@ -393,6 +393,46 @@ TEST_CASE("gltf: corrupt image bytes rejected") {
     CHECK(mesh.error() == ErrorCode::kCorruptData);
 }
 
+// Found by the November 2026 fuzz campaign: stb_image passed a null
+// destination to memcpy for a PNG whose only IDAT chunk is empty. The file is
+// rejected either way; under UBSan this test is what shows the call is gone.
+TEST_CASE("gltf: PNG with an empty IDAT chunk rejected") {
+    const std::uint8_t png[57] = {
+        0x89, 'P',  'N',  'G',  0x0D, 0x0A, 0x1A, 0x0A,       // signature
+        0,    0,    0,    13,   'I',  'H',  'D',  'R',        // IHDR, 13 bytes
+        0,    0,    0,    1,    0,    0,    0,    1,          // 1 x 1
+        8,    0,    0,    0,    0,                            // 8-bit grey
+        0,    0,    0,    0,                                  // CRC (unchecked)
+        0,    0,    0,    0,    'I',  'D',  'A',  'T',  0, 0, 0, 0, // empty IDAT
+        0,    0,    0,    0,    'I',  'E',  'N',  'D',  0, 0, 0, 0,
+    };
+    float positions[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    std::uint8_t full_bin[36 + 64] = {};
+    std::memcpy(full_bin, positions, 36);
+    std::memcpy(full_bin + 36, png, sizeof(png));
+
+    const char* json =
+        "{\"asset\":{\"version\":\"2.0\"},"
+        "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+        "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}],"
+        "\"textures\":[{\"source\":0}],"
+        "\"images\":[{\"bufferView\":1,\"mimeType\":\"image/png\"}],"
+        "\"accessors\":["
+        "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+        "\"min\":[0,0,0],\"max\":[1,1,0]}],"
+        "\"bufferViews\":["
+        "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":57}],"
+        "\"buffers\":[{\"byteLength\":100}]}";
+
+    GlbBuilder glb;
+    glb.finish(json, std::strlen(json), full_bin, static_cast<std::uint32_t>(sizeof(full_bin)));
+    auto mesh = load_gltf(glb.bytes.data(), glb.bytes.size());
+    REQUIRE(!mesh);
+    CHECK(mesh.error() == ErrorCode::kCorruptData);
+}
+
 TEST_CASE("gltf skinned: minimal skinned triangle loads") {
     const auto bytes = read_sample(HUE_TEST_CORPUS_DIR, "skinned_min.glb");
     auto mesh = hue::asset::load_gltf_skinned(bytes.data(), bytes.size());

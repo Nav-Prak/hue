@@ -90,7 +90,10 @@ Defenses:
 5. **Tagged, canaried allocations** — stb allocations route through the
    engine heap (`MemoryTag::kAssets`), so decode buffers get the same
    canary/poison treatment as everything else and show up in memory
-   snapshots.
+   snapshots. The same translation unit replaces stb_image's `memcpy` and
+   `memset` with wrappers that skip a zero length: stb_image passed a null
+   destination with a zero length for a PNG with an empty first IDAT chunk,
+   which the November 2026 fuzz campaign reported through UBSan.
 6. **Texture count / material caps** — `kGltfMaxTextures`,
    `kGltfMaxMaterials`; factors are clamped to [0, 1] and texture indices
    bounds-checked.

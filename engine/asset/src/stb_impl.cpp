@@ -7,9 +7,38 @@
 
 #include "hue/core/memory.h"
 
+// Every header stb_image includes is included here first, so the memcpy and
+// memset replacements below cannot touch a system header.
+#include <cassert>
+#include <climits>
+#include <cmath>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace {
+
+// stb_image calls memcpy with a null destination and a zero length for a PNG
+// whose first IDAT chunk is empty (found by the November 2026 fuzz campaign
+// through UBSan). The C library declares those pointers non-null even for a
+// zero length, so the call is undefined behaviour. A zero-length copy or fill
+// is skipped here instead of reaching the library.
+[[maybe_unused]] inline void* stb_memcpy(void* destination, const void* source,
+                                         std::size_t size) {
+    return size == 0 ? destination : std::memcpy(destination, source, size);
+}
+
+[[maybe_unused]] inline void* stb_memset(void* destination, int value, std::size_t size) {
+    return size == 0 ? destination : std::memset(destination, value, size);
+}
 
 void* stb_malloc(std::size_t size) {
     auto allocation = hue::heap_allocate(size > 0 ? size : 1, alignof(std::max_align_t),
@@ -55,8 +84,14 @@ void* stb_realloc_sized(void* memory, std::size_t old_size, std::size_t new_size
 #pragma warning(push, 0)
 #endif
 
+#define memcpy(destination, source, size) stb_memcpy(destination, source, size)
+#define memset(destination, value, size) stb_memset(destination, value, size)
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+
+#undef memcpy
+#undef memset
 
 #if defined(__clang__)
 #pragma clang diagnostic pop

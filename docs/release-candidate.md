@@ -183,7 +183,9 @@ campaign, now six targets, has not completed. The first attempt stopped after
 11 of 24 hours on a runner timeout and, on inspection, had logged undefined
 behaviour in cgltf on misaligned glTF accessors; the loader now rejects those
 files. A second attempt was cut short after one hour when the WSL virtual
-machine shut down; a third was started on November 13.
+machine shut down. A third stopped at 3.4 hours on a second finding, a
+zero-length `memcpy` with a null pointer inside stb_image, now also fixed. A
+fourth was started on November 14.
 [Its run log](fuzz-campaign.md#run-log) says what has been observed. The owner-waived and deferred items above are otherwise
 unchanged.
 

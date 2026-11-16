@@ -104,10 +104,36 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
   executions, animation events 47.6 million, scene 85.5 million, tuning
   129.4 million) passed with no artifact and no sanitizer report; the
   partial shader-contract log has none either. WAV did not run.
-- Third 24-hour campaign, same clean clone at `50fb994` (output
-  `~/hue-campaign3-24h`, console log `~/hue-campaign3-24h.log`): **started
-  November 13, not finished.** No result is claimed here. Its `wsl.exe` was
-  created through WMI so that it does not belong to any tool's process tree.
+- Third 24-hour attempt, same clean clone at `50fb994` (output
+  `~/hue-campaign3-24h`): **stopped by the runner at 3.43 of 24 hours, status
+  `failed`, with one finding.** It is not acceptance evidence. Its `wsl.exe`
+  was created through WMI, outside any tool's process tree, and it ran
+  until the runner stopped it.
+  - *Finding.* Slice 13 (glTF) logged one UBSan report: `stb_image.h:1683`,
+    "null pointer passed as argument 1, which is declared to never be null".
+    stb_image calls `memcpy` with a null destination and a zero length for a
+    PNG whose first IDAT chunk is empty. Nothing is copied and the image is
+    rejected ("no IDAT"), but the call is undefined behaviour reached from
+    untrusted input. The harness exited zero and saved no artifact; the
+    runner's log check, added after the first attempt, is what stopped the
+    campaign.
+  - *Fix.* The one translation unit that compiles stb_image now routes its
+    `memcpy` and `memset` calls through wrappers that skip a zero length. A
+    doctest and a new seed (`png_empty_idat.glb`) hold the triggering file,
+    rebuilt by hand since libFuzzer kept no artifact. The seed reproduces
+    the report with the `50fb994` harness and gives none with the patched
+    one; replaying the stopped run's 1,294-file glTF corpus through the
+    patched harness gives none either.
+  - *What the 12 completed slices did.* Executions: glTF 1.65 million (two
+    clean slices, plus 0.89 million in the failed one), animation events 110
+    million, scene 168 million, tuning 237 million, shader contract 0.26
+    million, WAV 60 million. No ASan report, crash, timeout or artifact in
+    any target, no misaligned-load report, and no sanitizer report outside
+    that glTF slice.
+- Fourth 24-hour campaign, from the commit that contains the stb_image fix
+  (clean clone `~/hue-campaign4`, output `~/hue-campaign4-24h`, console log
+  `~/hue-campaign4-24h.log`): **started November 14, not finished.** No
+  result is claimed here. Started through WMI like the third.
   The budget is shared: each target gets about four hours, not twenty-four.
   The run pauses if the PC sleeps and dies if WSL (`wsl --shutdown`) or
   Windows restarts; a hard stop leaves the lock file and a `running` record
@@ -116,7 +142,7 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
 Check progress from Windows:
 
 ```sh
-wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign3-24h.log; ls ~/hue-campaign3-24h/artifacts/*"
+wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign4-24h.log; ls ~/hue-campaign4-24h/artifacts/*"
 ```
 
 When it ends, `campaign.json` holds the status, per-slice times and libFuzzer
