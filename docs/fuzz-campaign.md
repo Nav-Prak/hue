@@ -249,20 +249,36 @@ accessors in cgltf, a null zero-length `memcpy` in stb_image), but no
 completed campaign. Everything below uses the per-target runner described
 at the top of this page.
 
-- **Per-target campaign, started November 17** (WSL clone `~/hue-fuzz`,
-  output `~/hue-fuzz-out`, four hours per target, six targets at once).
-  **Not finished; no result is claimed here.**
-  It makes no progress while the PC sleeps and stops if WSL or Windows
-  restarts; `tools\fuzz_wsl.ps1` then continues it from where each target
-  was.
+- **Per-target campaign, November 17, revision `d790665`** (WSL2 Ubuntu
+  24.04, Clang 18, ASan + UBSan; clone `~/hue-fuzz`, output
+  `~/hue-fuzz-out`): **completed, no finding.** Every target consumed its
+  four-hour budget (14,400 counted seconds each, 24 target-hours in all)
+  in about 4.3 hours of wall time, 06:06 to roughly 10:24 UTC, six targets
+  at once and without interruption. All slices ran from `d790665`.
 
-Check progress from Windows:
+  | Target | Counted | Executions | Passed slices | `clock_step` | Corpus files |
+  |---|---|---|---|---|---|
+  | gltf | 4.00 h | 12,440,174 | 17 | 1 | 2,339 |
+  | animation_events | 4.00 h | 542,003,357 | 17 | 2 | 4,408 |
+  | scene | 4.00 h | 1,453,950,922 | 17 | 2 | 18,493 |
+  | tuning | 4.00 h | 1,857,723,798 | 17 | 2 | 3,842 |
+  | shader_contract | 4.00 h | 1,613,721 | 17 | 2 | 3,124 |
+  | wav | 4.00 h | 373,022,274 | 17 | 2 | 292 |
 
-```sh
-powershell -File tools\fuzz_wsl.ps1 -Status
-```
+  No slice failed or was `interrupted`. No log contains a sanitizer
+  report, and every `artifacts/` directory is empty. The eleven
+  `clock_step` slices counted zero seconds: six at WSL start-up (one per
+  target, 0.4 s each) and four later ones (animation events, scene and
+  tuning at 07:22, WAV at 08:22, about 1.5 s each) where libFuzzer measured
+  a negative run time and exited at once; and one shader-contract slice at
+  09:22 that reported a timeout "after 18446744073709551614 seconds" (a
+  two-second backwards step) after 78 s, whose saved input replayed cleanly
+  in 0.2 s and is kept in `shader_contract/clock-step/`.
 
-When every target reads `completed`, record the contents of
-`~/hue-fuzz-out/campaign.json` here, including `clock_step` and
-`interrupted` slices and any finding, before treating Week 18 as having
-evidence.
+  What this does and does not show: each harness ran for four hours under
+  ASan and UBSan without a report. That is the per-target time the old
+  single-worker 24-hour plan would have given, not 24 hours per target and
+  not the 24–48-hour range the Week 18 plan named. Execution counts differ
+  by three orders of magnitude between targets (glTF and shader contract
+  are slow per input), so their exploration is far shallower. It is not a
+  proof of security, and coverage counters are not source-line coverage.
