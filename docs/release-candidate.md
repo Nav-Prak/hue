@@ -94,7 +94,7 @@ no scope was added.
   sizes and all three diagnostic pages.
 - **Fuzz campaign runner.** `tools/fuzz_campaign.py` and
   [its procedure](fuzz-campaign.md) prepare the deferred sustained run; CI
-  exercises the runner for 15 seconds. The 24–48-hour campaign itself has still
+  exercises the runner briefly. The 24–48-hour campaign itself has still
   not been run.
 - **Smoke timeouts.** The rendered encounter and package smokes are paced by
   presentation. On this pass the desktop presented at about 11 frames per
@@ -189,7 +189,10 @@ fourth stopped at 5.6 hours on a false timeout caused by the WSL clock
 stepping backwards, with no parser finding; the runner now verifies and
 records that case. A fifth ran twelve hours, the longest so far, before a
 two-second clock step the runner did not yet recognise stopped it, again
-with no parser finding. A sixth was started on November 16.
+with no parser finding. A sixth was cut short by a restart of the PC. The
+runner was then rebuilt so that each target completes on its own, targets
+run in parallel and any interruption resumes; a campaign under it was
+started on November 17.
 [Its run log](fuzz-campaign.md#run-log) says what has been observed. The owner-waived and deferred items above are otherwise
 unchanged.
 

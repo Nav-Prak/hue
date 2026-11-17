@@ -3,70 +3,116 @@
 Prepared October 14, 2026 as a runner only. On November 11, 2026 the owner
 approved a run; see "Run log" at the end for what was started and what has
 and has not been observed. Short CI runs and runner tests are not the
-24–48-hour acceptance evidence.
+sustained acceptance evidence.
+
+After six attempts that each lost everything to one event (a finding in one
+target, a restart, a clock step), the runner was rebuilt on November 17 around
+three rules: every target is its own unit of evidence, targets run in
+parallel, and running the same command again continues whatever is unfinished.
+
+## Running it
 
 Use a Linux worker with the normal Clang/Ninja build prerequisites (on Ubuntu
 24.04: `clang clang-tools cmake ninja-build xorg-dev git`; `clang-tools`
-provides the `clang-scan-deps` the build needs), Python 3.11+
-and enough free space for generated corpus/logs. From a clean committed checkout:
+provides the `clang-scan-deps` the build needs), Python 3.11+ and enough free
+space for generated corpus and logs. From a clean committed checkout:
+
+```sh
+tools/fuzz_local.sh
+```
+
+That builds the six sanitized harnesses and starts or resumes the campaign in
+`~/hue-fuzz-out` (`HUE_FUZZ_OUTPUT` changes it), logging to
+`~/hue-fuzz-out.log`. It is the same as:
 
 ```sh
 cmake --preset linux-clang-sanitized -DHUE_FUZZ=ON -DHUE_TRACY_ENABLE=OFF
 cmake --build --preset linux-sanitized --target fuzz_gltf fuzz_animation_events fuzz_scene fuzz_tuning fuzz_shader_contract fuzz_wav
-python3 tools/fuzz_campaign.py --binary-dir build/linux-clang-sanitized/tools/fuzz --output build/campaign-24h --seconds 86400 --slice-seconds 900
+python3 tools/fuzz_campaign.py --binary-dir build/linux-clang-sanitized/tools/fuzz --output ~/hue-fuzz-out
 ```
 
-One worker rotates through all six targets in
-15-minute slices. The 24-hour budget is cumulative worker elapsed time across
-the suite, **not 24 hours per target**. Startup/shutdown overhead is included;
-per-target actual time, requested time, return status and available libFuzzer
-execution/coverage counters are stored in `campaign.json`. Timeout cleanup can
-exceed the nominal budget slightly. Counters are libFuzzer coverage/features,
-not source-line coverage percentages; do not add coverage counts across runs.
+On the development PC the checkout is `~/hue-fuzz` inside WSL, and Windows
+drives it:
 
-The runner copies seeds into its output directory and never grows the checked-in
-corpus. Each harness has a 10-second input timeout, 2 GiB RSS limit and a bounded
-maximum input size. Input size caps are policy limits, not proof that every
-valid large asset has been exercised. Retain `artifacts/`, `corpus/`, `logs/`
-and `campaign.json` together. Runtime log output and corpus growth still consume
-disk space; monitor free space during any long run.
+```sh
+powershell -File tools\fuzz_wsl.ps1            # start or resume, detached
+powershell -File tools\fuzz_wsl.ps1 -Status    # progress of each target
+powershell -File tools\fuzz_wsl.ps1 -Update    # git pull in the WSL clone, then resume
+```
 
-Ctrl+C pauses the current harness; its partial time is recorded, not reported
-as a passed slice. Resume with the identical command plus `--resume`. Source
-revision, binary paths/hashes and total budget must match. One lock file prevents
-two workers from sharing an output. A hard kill leaves a running record/lock:
-inspect the process and artifacts and start a fresh output rather than deleting
-evidence or pretending the interrupted time was measured.
+Defaults: four hours of fuzzing per target (`--seconds-per-target 14400`), in
+15-minute slices, with up to six targets at once (`--jobs`, default half the
+logical cores). That is the same 24 worker-hours the old single-worker plan
+asked for, in about four and a half hours of wall time. `--targets` limits a
+run to some targets and `--restart TARGET` archives one target's state and
+starts it again.
 
-A sanitizer finding, crash, timeout or nonzero exit stops the campaign. So does
-a sanitizer report in a slice's log even when the harness exits zero: UBSan
-reports do not stop libFuzzer and leave no artifact, so an empty `artifacts/`
-directory alone is not a clean result. A harness that has not exited 300
-seconds after its time budget is stopped and recorded as a runner timeout.
+## What counts
 
-One case does not stop the campaign. libFuzzer times units with the wall
-clock, and a virtual machine's clock can be stepped backwards by its host.
-libFuzzer then measures a negative duration and either reports a timeout
-"after 18446744073709551615 seconds" (minus one second as an unsigned number)
-or exits at once believing its budget is spent. The runner records such a
-slice as `clock_step`, never as passed. For the timeout form it does so only
-if the one reported duration is that kind of impossible number (2^63 or
-more), no sanitizer report is present, and the single saved input replays through the harness
-with a zero exit in under ten seconds; the input then moves to
-`clock-step/<target>/` and the replay log is kept. Anything else is still a
-failure. A completed campaign must list its `clock_step` slices beside its
-result.
-Triage
-the saved input, add a regression, rebuild, and start a fresh campaign directory;
-failed campaigns cannot be resumed into a misleading clean result. `completed`
-means the requested budget was consumed, not that security is proven. Review
-all slice statuses, target distribution, counters and any incomplete statistics
-before recording acceptance. Resume is intended after graceful pauses, not to
-merge different engine revisions.
+- **Each target stands alone.** `<output>/<target>/` holds that target's
+  `state.json`, corpus, logs and artifacts. A target is `completed` when its
+  passed slices add up to its budget. A finding fails that target only; the
+  others carry on and their completed status is unaffected.
+- **Only demonstrated fuzzing time counts.** A slice counts the smallest of
+  its requested time, its measured wall time and, where `/proc` reports it,
+  the CPU time the harness actually used. A PC that sleeps through a slice
+  therefore adds nothing, and a stepped clock cannot inflate the total.
+  Interrupted, `clock_step` and failed slices count zero.
+- **A result belongs to the harness that produced it.** State records the
+  harness's SHA-256. If a rebuilt harness differs, that target's old directory
+  moves to `<output>/superseded/` and the target starts again from zero, with
+  the old corpus added to its seeds (a corpus is input, not evidence). Targets
+  whose harness is byte-identical keep their progress, so a fix in one parser
+  does not throw away the others. Each slice also records the source
+  revision it ran from.
+- **Stopping loses one slice at most.** Ctrl+C or a termination signal asks
+  each harness to stop; those slices are recorded as `interrupted`. If the
+  runner is killed outright, or the machine restarts, the next run finds the
+  slice still marked `running`, records it as `interrupted`, scans its
+  partial log for sanitizer reports, and continues. The lock is an operating
+  system file lock, so a dead runner never blocks the next one and two live
+  runners cannot share an output.
+- **A failure is sticky.** A crash, a real timeout, a nonzero exit, a
+  sanitizer report anywhere in a slice's log (UBSan reports do not stop
+  libFuzzer and leave no artifact), a harness that has not exited 300 seconds
+  after its budget, or a file in `artifacts/` that no slice accounts for all
+  mark the target `failed`. It stays failed on every later run until its
+  harness changes or `--restart` is given. Triage the saved input, add a
+  regression test, rebuild, and run again.
+- **Clock steps are listed, not counted and not fatal.** libFuzzer times
+  units with the wall clock, and a virtual machine's clock can be stepped
+  backwards by its host. libFuzzer then measures a negative duration and
+  either reports a timeout "after 18446744073709551615 seconds" (minus one
+  second as an unsigned number) or exits at once believing its budget is
+  spent. The runner records such a slice as `clock_step`. For the timeout
+  form it does so only if the one reported duration is that kind of
+  impossible number (2^63 or more), no sanitizer report is present, and the
+  single saved input replays through the harness with a zero exit in under
+  ten seconds; the input then moves to `<target>/clock-step/` and the replay
+  log is kept. A target that produces nothing but uncounted slices fails
+  after a bounded number of them rather than looping.
 
-CI exercises the same runner for only 15 seconds and retains its manifest/logs,
-in addition to the six existing 60-second harness runs. This verifies plumbing,
-not sustained coverage or human playability.
+`<output>/campaign.json` summarises every target: status, counted seconds,
+slices by outcome, executions in passed slices, harness hash and source
+revisions. Its overall status is `completed` only when all six targets are.
+Record a result from that file and list `clock_step` and `interrupted` slices
+beside it. `completed` means the budget was consumed without a finding, not
+that security is proven. Counters are libFuzzer coverage/features, not
+source-line coverage percentages; do not add coverage counts across runs.
+
+The runner copies seeds into its output directory and never grows the
+checked-in corpus. Each harness has a 10-second input timeout, a 2 GiB RSS
+limit and a bounded maximum input size. Input size caps are policy limits, not
+proof that every valid large asset has been exercised. Logs and corpus growth
+consume disk space; watch free space during a long run.
+
+The PC still has to be on and awake for fuzzing to happen. What changed is
+the cost of it not being: a sleep or restart loses the slices in flight and
+nothing else, and one command resumes. Nothing resumes it automatically.
+
+CI exercises the same runner for three seconds per target and retains its
+state and logs, in addition to the six existing 60-second harness runs. This
+verifies plumbing, not sustained coverage or human playability.
 
 ## Run log
 
@@ -188,21 +234,35 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
     shader contract 0.58 million, WAV 219 million (1.9 to 2.1 hours each,
     shader contract 1.3 h). No sanitizer report, crash or genuine timeout
     in any target; neither earlier finding recurred.
-- Sixth 24-hour campaign, from the commit that widens the clock-step rule
-  (clean clone `~/hue-campaign6`, output `~/hue-campaign6-24h`, console log
-  `~/hue-campaign6-24h.log`): **started November 16, not finished.** No
-  result is claimed here. Started through WMI like the third.
-  The budget is shared: each target gets about four hours, not twenty-four.
-  The run pauses if the PC sleeps and dies if WSL (`wsl --shutdown`) or
-  Windows restarts; a hard stop leaves the lock file and a `running` record
-  and needs a fresh output directory, as described above.
+- Sixth 24-hour attempt, revision `437f9be` (output `~/hue-campaign6-24h`,
+  started November 16): **interrupted at 2.89 of 24 hours when the PC was
+  restarted; not acceptance evidence.** Ten slices passed (glTF 1.60 million
+  executions, animation events 105 million, scene 156 million, tuning 243
+  million, shader contract 0.23 million, WAV 46 million), one
+  shader-contract slice was a verified `clock_step`, and the twelfth was in
+  flight. No sanitizer report, crash or artifact.
+
+Those six attempts used the first runner: one worker, one shared 24-hour
+budget, and a campaign that any single event ended. Between them they ran
+about 36 hours and produced two real findings, both fixed (misaligned glTF
+accessors in cgltf, a null zero-length `memcpy` in stb_image), but no
+completed campaign. Everything below uses the per-target runner described
+at the top of this page.
+
+- **Per-target campaign, started November 17** (WSL clone `~/hue-fuzz`,
+  output `~/hue-fuzz-out`, four hours per target, six targets at once).
+  **Not finished; no result is claimed here.**
+  It makes no progress while the PC sleeps and stops if WSL or Windows
+  restarts; `tools\fuzz_wsl.ps1` then continues it from where each target
+  was.
 
 Check progress from Windows:
 
 ```sh
-wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign6-24h.log; ls ~/hue-campaign6-24h/artifacts/*"
+powershell -File tools\fuzz_wsl.ps1 -Status
 ```
 
-When it ends, `campaign.json` holds the status, per-slice times and libFuzzer
-counters. Record the outcome here, including any finding, before treating
-Week 18 as having evidence.
+When every target reads `completed`, record the contents of
+`~/hue-fuzz-out/campaign.json` here, including `clock_step` and
+`interrupted` slices and any finding, before treating Week 18 as having
+evidence.

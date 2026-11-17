@@ -90,8 +90,8 @@ jobs:
           -DHUE_TRACY_ENABLE=OFF
       - name: Build parser fuzzers
         run: cmake --build --preset linux-sanitized --target fuzz_gltf fuzz_animation_events fuzz_scene fuzz_tuning fuzz_shader_contract fuzz_wav
-      - name: Exercise campaign runner (18s total, not sustained acceptance)
-        run: python3 tools/fuzz_campaign.py --binary-dir build/linux-clang-sanitized/tools/fuzz --output build/campaign-smoke --seconds 18 --slice-seconds 1
+      - name: Exercise campaign runner (3s per target, not sustained acceptance)
+        run: python3 tools/fuzz_campaign.py --binary-dir build/linux-clang-sanitized/tools/fuzz --output build/campaign-smoke --seconds-per-target 3 --slice-seconds 1 --jobs 2
       - name: Retain campaign runner smoke evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -99,7 +99,8 @@ jobs:
           name: campaign-runner-smoke
           path: |
             build/campaign-smoke/campaign.json
-            build/campaign-smoke/logs/
+            build/campaign-smoke/*/state.json
+            build/campaign-smoke/*/logs/
           if-no-files-found: ignore
       - name: Fuzz glTF import (60s)
         run: >
