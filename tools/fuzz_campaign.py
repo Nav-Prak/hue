@@ -64,9 +64,10 @@ def sanitizer_reports(log, limit=8):
 # libFuzzer times units and its total budget with the wall clock. When that
 # clock is stepped backwards (a virtual machine resynchronising with its
 # host), it measures a negative duration: either it reports a timeout "after
-# 18446744073709551615 seconds" or it believes its budget is spent and exits
+# 18446744073709551615 seconds" (minus one as an unsigned 64-bit number; a
+# two-second step gives ...614) or it believes its budget is spent and exits
 # at once. Neither says anything about the input.
-NEGATIVE_TIMEOUT = b"libFuzzer: timeout after 18446744073709551615 seconds"
+TIMEOUT_SECONDS = re.compile(rb"libFuzzer: timeout after (\d+) seconds")
 NEGATIVE_DONE = re.compile(rb"Done \d+ runs in -\d+ second")
 WRITTEN = re.compile(rb"Test unit written to (\S+)")
 
@@ -85,7 +86,8 @@ def clock_step(output, target, binary, log, record):
     tail = log_tail(log)
     if record["status"] == "passed":
         return "libFuzzer measured a negative run time and exited early" if NEGATIVE_DONE.search(tail) else None
-    if record.get("returncode") in (None, 0) or NEGATIVE_TIMEOUT not in tail:
+    reported = TIMEOUT_SECONDS.findall(tail)
+    if record.get("returncode") in (None, 0) or len(reported) != 1 or int(reported[0]) < 1 << 63:
         return None
     written = WRITTEN.findall(tail)
     directory = (output / "artifacts" / target).resolve()

@@ -187,7 +187,9 @@ machine shut down. A third stopped at 3.4 hours on a second finding, a
 zero-length `memcpy` with a null pointer inside stb_image, now also fixed. A
 fourth stopped at 5.6 hours on a false timeout caused by the WSL clock
 stepping backwards, with no parser finding; the runner now verifies and
-records that case. A fifth was started on November 15.
+records that case. A fifth ran twelve hours, the longest so far, before a
+two-second clock step the runner did not yet recognise stopped it, again
+with no parser finding. A sixth was started on November 16.
 [Its run log](fuzz-campaign.md#run-log) says what has been observed. The owner-waived and deferred items above are otherwise
 unchanged.
 

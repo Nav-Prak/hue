@@ -47,10 +47,11 @@ seconds after its time budget is stopped and recorded as a runner timeout.
 One case does not stop the campaign. libFuzzer times units with the wall
 clock, and a virtual machine's clock can be stepped backwards by its host.
 libFuzzer then measures a negative duration and either reports a timeout
-"after 18446744073709551615 seconds" or exits at once believing its budget is
-spent. The runner records such a slice as `clock_step`, never as passed. For
-the timeout form it does so only if that exact message is present, no
-sanitizer report is, and the single saved input replays through the harness
+"after 18446744073709551615 seconds" (minus one second as an unsigned number)
+or exits at once believing its budget is spent. The runner records such a
+slice as `clock_step`, never as passed. For the timeout form it does so only
+if the one reported duration is that kind of impossible number (2^63 or
+more), no sanitizer report is present, and the single saved input replays through the harness
 with a zero exit in under ten seconds; the input then moves to
 `clock-step/<target>/` and the replay log is kept. Anything else is still a
 failure. A completed campaign must list its `clock_step` slices beside its
@@ -165,9 +166,31 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
     shader contract 0.25 million, WAV 117 million (about one hour each,
     shader contract 0.5 h). No sanitizer report, crash or artifact in any
     target; neither earlier finding recurred.
-- Fifth 24-hour campaign, from the commit with the runner change (clean
-  clone `~/hue-campaign5`, output `~/hue-campaign5-24h`, console log
-  `~/hue-campaign5-24h.log`): **started November 15, not finished.** No
+- Fifth 24-hour attempt, revision `477a3c7` with the runner change (output
+  `~/hue-campaign5-24h`, started November 16): **stopped by the runner at
+  12.0 of 24 hours, status `failed`; no parser finding.** It is not
+  acceptance evidence.
+  - *Why it stopped.* Slice 49 (glTF) ended with a libFuzzer timeout "after
+    18446744073709551614 seconds" ("working on the last Unit for -2
+    seconds"): the same backwards clock step, this time by two seconds. The
+    runner only recognised the one-second form, so it failed the slice. The
+    saved input replays in 0.02 seconds, loads as a valid mesh, and produces
+    no sanitizer report. The runner now accepts any duration of 2^63 seconds
+    or more, under the same replay rule.
+  - *Clock steps handled.* Five earlier slices were recorded as
+    `clock_step` and the campaign continued: three shader-contract timeouts
+    with a negative duration (slices 5, 17 and 47; each saved input replayed
+    cleanly in under 0.2 seconds) and two immediate exits (tuning slice 16,
+    scene slice 45). Six clock steps in twelve hours is the environment this
+    runs in; their cause on this PC is not known.
+  - *What the 43 passed slices did.* Executions: glTF 7.25 million,
+    animation events 583 million, scene 713 million, tuning 1,036 million,
+    shader contract 0.58 million, WAV 219 million (1.9 to 2.1 hours each,
+    shader contract 1.3 h). No sanitizer report, crash or genuine timeout
+    in any target; neither earlier finding recurred.
+- Sixth 24-hour campaign, from the commit that widens the clock-step rule
+  (clean clone `~/hue-campaign6`, output `~/hue-campaign6-24h`, console log
+  `~/hue-campaign6-24h.log`): **started November 16, not finished.** No
   result is claimed here. Started through WMI like the third.
   The budget is shared: each target gets about four hours, not twenty-four.
   The run pauses if the PC sleeps and dies if WSL (`wsl --shutdown`) or
@@ -177,7 +200,7 @@ logical cores, one worker.** Source revision `4aef9cf` from a clean clone at
 Check progress from Windows:
 
 ```sh
-wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign5-24h.log; ls ~/hue-campaign5-24h/artifacts/*"
+wsl -d Ubuntu -- bash -lc "tail -n 5 ~/hue-campaign6-24h.log; ls ~/hue-campaign6-24h/artifacts/*"
 ```
 
 When it ends, `campaign.json` holds the status, per-slice times and libFuzzer
