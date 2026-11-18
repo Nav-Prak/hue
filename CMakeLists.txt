@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Hue
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "A from-scratch C++20/Vulkan third-person combat runtime"
     LANGUAGES CXX
 )

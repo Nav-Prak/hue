@@ -56,7 +56,7 @@ TEST_CASE("Result<void> success and failure") {
 
 TEST_CASE("engine version matches project version") {
     auto v = hue::engine_version();
-    CHECK(v.major == 0);
-    CHECK(v.minor == 1);
-    CHECK(std::strcmp(hue::engine_version_string(), "hue 0.1.0") == 0);
+    CHECK(v.major == 1);
+    CHECK(v.minor == 0);
+    CHECK(std::strcmp(hue::engine_version_string(), "hue 1.0.0") == 0);
 }
