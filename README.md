@@ -36,7 +36,8 @@ static props with collision. Characters and animations are KayKit (CC0).*
 - **Tooling.** In-game combat and memory diagnostics, Tracy profiling, per-fight
   telemetry, and a packager that produces a verified, hash-manifested ZIP.
 
-186 automated tests pass on Windows in Release, and 185 under AddressSanitizer.
+186 automated tests pass in CI on Windows and Linux, and 185 under
+AddressSanitizer (plus UBSan on Linux).
 What has and has not been checked is listed under [Status](#status).
 
 ## Playing the encounter
@@ -116,8 +117,10 @@ executable-relative, independent of the launch directory.
 ## Status
 
 Hue is a portfolio project, verified on one Windows machine (RTX 5090, MSVC).
-It has not been checked by outside playtesters, on a physical gamepad, on a
-clean machine or on Linux, and multi-enemy fights are not balanced. Fuzzing
+CI builds and tests it on Windows (MSVC) and Linux (Clang, including ASan
+and UBSan, with a software Vulkan driver), but nobody has played it on
+Linux. It has not been checked by outside playtesters, on a physical
+gamepad or on a clean machine, and multi-enemy fights are not balanced. Fuzzing
 ran four hours per target with no finding, short of the 24–48 hours first
 planned. Details are in [candidate scope, verification and
 risks](docs/release-candidate.md) and the [development

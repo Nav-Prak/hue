@@ -174,8 +174,13 @@ Release), all from commit `b928e6d`:
   project code. Later the same day the engine libraries and all six fuzz
   targets were built from a clean clone in WSL2 Ubuntu 24.04 with Clang 18,
   ASan and UBSan, without warnings in project code, and a one-minute campaign
-  across the six targets passed with no findings. The Linux game executable
-  and the Linux test suite have still not been built or run for this work.
+  across the six targets passed with no findings. On November 17, after the
+  billing lock was cleared, GitHub Actions ran for `5754f08` and all seven
+  jobs passed: Windows MSVC debug, release and ASan; Linux Clang debug,
+  release and ASan + UBSan (186 and 185 tests; the Linux jobs render through
+  Mesa's software Vulkan driver, while the Windows runners skip the renderer
+  smoke for lack of a GPU); and the six 60-second parser fuzz runs. That is
+  the first Linux build and test run. Nobody has played Hue on Linux.
 
 Not done: gamepad checks of target switching, any balance work for multi-enemy
 fights (the shipped tuning was made for one enemy). The sustained fuzz
