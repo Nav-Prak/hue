@@ -1,16 +1,43 @@
 # Hue
 
-> A from-scratch C++20/Vulkan third-person combat runtime: custom memory systems, skeletal animation, ECS, Jolt physics, bounded asset loading with fuzz coverage, runtime combat debug tools, data-driven multi-enemy scenes, a shadow-mapped sun, sound effects, and a playable encounter.
+A third-person combat game runtime written from scratch in C++20 and Vulkan,
+built in 20 weeks before GTA 6 ships.
 
-The two-attack Windows v1 implementation is frozen as a local candidate. On
-October 14, 2026 the owner waived external acceptance gates to finish this scope
-quickly; unperformed checks are not claimed as passed. See
-[candidate scope, verification and risks](docs/release-candidate.md). The engine integrates
-fixed-tick movement, animation, combat, enemy AI, start/results/restart,
-combat/memory diagnostics, staged scene/tuning edits, validated shader reload,
-per-fight telemetry and local review packaging. See the [package verification notes](docs/week16.md) and
-[current baseline and revised plan](docs/timeline.md) for implementation versus
-acceptance status.
+![The gauntlet scene: the player faces three enemies among box props, with sun shadows and the combat HUD](docs/media/gauntlet.png)
+
+*The `gauntlet` scene: one player against three enemies, shadow-mapped sun,
+static props with collision. Characters and animations are KayKit (CC0).*
+
+## What's in it
+
+- **Engine core.** A tagged heap, frame arenas and pool allocators that
+  account for every engine allocation, a sparse-set ECS, a job system, and no exceptions or RTTI
+  in engine code.
+- **Rendering.** A Vulkan 1.3 renderer with GPU skinning, a lit pass, a 2048²
+  shadow map with PCF for the sun, point lights, and shader hot reload that
+  validates a new shader before swapping it in.
+- **Animation and combat.** Skeletal animation sampling and blending, clip
+  events that drive attack windows and dodge invulnerability, light and heavy
+  attacks, lock-on with target switching, and enemy AI for one player against
+  up to seven enemies.
+- **Physics and audio.** Jolt character controllers and static collision;
+  twelve procedural sound effects with distance attenuation and panning,
+  through Hue's own WAV parser.
+- **Data-driven scenes.** Actors, props, lights and the sun come from
+  validated scene files that can be swapped at runtime.
+- **Security-minded loading.** Every byte read from a file is treated as
+  untrusted. The glTF, animation-event, scene, tuning, shader-contract and WAV
+  parsers are bounded, validated and fuzzed under ASan and UBSan. Fuzzing
+  found two real bugs in third-party parsing code (misaligned glTF accessors
+  in cgltf, a null zero-length `memcpy` in stb_image); both are fixed with
+  regression tests, and a 24-target-hour campaign afterwards found nothing.
+  See the [threat model](docs/threat-model.md) and
+  [fuzz campaign log](docs/fuzz-campaign.md#run-log).
+- **Tooling.** In-game combat and memory diagnostics, Tracy profiling, per-fight
+  telemetry, and a packager that produces a verified, hash-manifested ZIP.
+
+186 automated tests pass on Windows in Release, and 185 under AddressSanitizer.
+What has and has not been checked is listed under [Status](#status).
 
 ## Playing the encounter
 
@@ -86,13 +113,18 @@ summarize with `python tools/fight_report.py C:/writable/fights.jsonl`. See
 [telemetry and evidence limits](docs/week15.md). Runtime files and config are
 executable-relative, independent of the launch directory.
 
-This is a local candidate with owner-waived external gates, not an externally
-verified release. Playtests, physical gamepad, clean-machine and Linux checks
-have not been completed. Sustained fuzzing ran four hours per target with no finding ([run log](docs/fuzz-campaign.md#run-log)), short of the planned 24–48 hours; interactive balance evidence and saved
-Tracy profiling are deferred; local checks and runtime validation remain enabled.
-Hue has no declared project-wide
-license; dependency/asset notices do not choose one for it. Nothing is published
-by these commands.
+## Status
+
+Hue is a portfolio project, verified on one Windows machine (RTX 5090, MSVC).
+It has not been checked by outside playtesters, on a physical gamepad, on a
+clean machine or on Linux, and multi-enemy fights are not balanced. Fuzzing
+ran four hours per target with no finding, short of the 24–48 hours first
+planned. Details are in [candidate scope, verification and
+risks](docs/release-candidate.md) and the [development
+timeline](docs/timeline.md).
+
+Hue has no declared project-wide licence; dependency and asset notices do not
+choose one for it. Nothing is published by the commands above.
 
 ## Layout
 
