@@ -40,10 +40,19 @@ static props with collision. Characters and animations are KayKit (CC0).*
 AddressSanitizer (plus UBSan on Linux).
 What has and has not been checked is listed under [Status](#status).
 
-## Playing the encounter
+## Download and play
 
-Run `build/windows-msvc/game/Release/hue.exe` after building (Linux:
-`build/linux-clang/game/hue`). Models/events and shaders stage beside the executable.
+Download `hue-v1.0.0-windows-x64.zip` from the
+[latest release](https://github.com/Nav-Prak/hue/releases/latest), extract the
+whole archive and run `hue.exe`. You need 64-bit Windows and a graphics driver
+with Vulkan 1.3 (any recent NVIDIA, AMD or Intel driver). Nothing else to
+install. `hue.exe --scene gauntlet` starts the three-enemy fight.
+
+To run your own build instead, use `build/windows-msvc/game/Release/hue.exe`
+(Linux: `build/linux-clang/game/hue`); models, shaders and config are staged
+beside the executable.
+
+## Controls
 
 | Action | Keyboard / mouse | Gamepad (Xbox-style mapping) |
 |---|---|---|
@@ -76,12 +85,18 @@ not a substitute for a human playtest or a combat-balance evaluation.
 
 ## Building
 
-Requirements: CMake ≥ 3.28, a C++20 compiler (MSVC 2022+ or Clang), Ninja on Linux.
+Requirements: Git, CMake ≥ 3.28 and a C++20 compiler (Visual Studio 2022 or
+later with the C++ workload on Windows; Clang and Ninja on Linux, plus
+`xorg-dev` on Ubuntu). The Vulkan SDK is not needed: every dependency is
+fetched and built at configure time, so the first configure needs internet
+access and takes a few minutes.
 
 ```
+git clone https://github.com/Nav-Prak/hue.git
+cd hue
 cmake --preset windows-msvc      # or linux-clang
-cmake --build --preset windows-release
-ctest --preset windows-release
+cmake --build --preset windows-release   # or linux-release
+ctest --preset windows-release           # or linux-release
 ```
 
 Sanitized build (ASan on MSVC, ASan+UBSan on Clang):
@@ -91,6 +106,67 @@ cmake --preset windows-msvc-asan   # or linux-clang-sanitized
 cmake --build --preset windows-asan
 ctest --preset windows-asan
 ```
+
+## Making a game with Hue
+
+Hue is MIT-licensed, so you can build your own game on it, open or closed
+source, commercial or not. Keep the copyright notice in `LICENSE` with the
+engine code, and ship `third-party-notices.txt` and `licenses/` with your game
+(the packager below does that for you).
+
+**1. Change the fight without writing code.** Everything in
+`assets/config` is data and is validated when it loads:
+
+- `tuning.json` holds the combat numbers: movement and dodge speeds, health,
+  poise and its regeneration, damage and timing of light and heavy attacks, AI
+  ranges, speeds and reaction times, lock-on range.
+- A scene file sets the sun, ambient light, up to 4 point lights, up to 16 box
+  props and the actors: one player first, then 1–7 enemies, each a
+  `kaykit_knight` or `kaykit_barbarian` with a position and facing. Copy
+  `gauntlet.json` to `assets/config/my_arena.json`, rebuild (config is staged
+  beside the executable), and run `hue --scene my_arena`.
+- Iterate live: edit the staged copy under
+  `build/windows-msvc/game/Release/assets/config/`, press F5 (scene) or F6
+  (tuning) in game to validate it, then R to restart with it. A bad edit is
+  rejected and the working data is kept. Copy good edits back to
+  `assets/config` so the next build keeps them.
+
+The exact formats and limits are in the
+[threat model](docs/threat-model.md#scene-configuration).
+
+**2. Change how it looks.** Shaders are GLSL in `assets/shaders` and are
+compiled to SPIR-V by the build. Start the game with
+`hue --debug-channel 7777`, rebuild the shaders, and send the line
+`shader.reload` to `127.0.0.1:7777` over TCP; the new shaders are validated
+and swapped in without a restart, or rejected with the old ones kept.
+
+**3. Write your own game.** The engine is a set of static libraries:
+`hue::core` (memory, math, containers, jobs, logging), `hue::render`,
+`hue::anim`, `hue::physics`, `hue::audio`, `hue::asset`, `hue::combat` and
+`hue::ecs`. `game/` is the reference game: `hue_gameplay` holds the encounter,
+actors, scenes, HUD, camera and audio events, and `game/src/main.cpp` wires it
+all together. The quickest start is to copy `game/` to a folder of your own
+(say `my_game/`), rename the two targets in its `CMakeLists.txt`
+(`hue_gameplay` and `hue_game`), add `add_subdirectory(my_game)` to the root
+`CMakeLists.txt`, and change it freely from there. The parts of that
+`CMakeLists.txt` that matter for any game are:
+
+```cmake
+target_link_libraries(my_game PRIVATE my_gameplay hue::ecs)  # engine libs come through my_gameplay
+hue_target_runtime_deps(my_game)          # runtime libraries beside the executable
+hue_target_shaders(my_game ${CMAKE_SOURCE_DIR}/assets/shaders/mesh.vert ...)  # compile GLSL to SPIR-V
+```
+
+New characters are glTF 2.0 (`.glb`) files with a skin and animation clips,
+plus an `.events.json` file naming when each attack is active and when a dodge
+is invulnerable; see `assets/models/player.events.json`. Adding a third rig
+means extending `RigId` in `game/src/scene_config.h` and the model list in
+`game/src/main.cpp`.
+
+House rules the engine code follows, worth keeping in your game: no exceptions
+or RTTI (errors return `hue::Result`), allocations go through the tagged
+allocators in `hue/core/memory.h` so the F2 memory page can account for them,
+and every byte read from a file is treated as untrusted and validated.
 
 ## Local review package
 
@@ -126,8 +202,11 @@ planned. Details are in [candidate scope, verification and
 risks](docs/release-candidate.md) and the [development
 timeline](docs/timeline.md).
 
-Hue has no declared project-wide licence; dependency and asset notices do not
-choose one for it. Nothing is published by the commands above.
+## Licence
+
+Hue is released under the [MIT License](LICENSE). Its dependencies and the
+KayKit character art keep their own permissive licences; see
+[third-party notices](docs/third-party-notices.txt).
 
 ## Layout
 

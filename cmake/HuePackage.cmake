@@ -24,6 +24,8 @@ install(FILES "${PROJECT_SOURCE_DIR}/docs/release-candidate.md" DESTINATION .
     RENAME RELEASE-NOTES.md COMPONENT HueRuntime)
 install(FILES "${PROJECT_SOURCE_DIR}/docs/third-party-notices.txt"
     DESTINATION . COMPONENT HueRuntime)
+install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION .
+    RENAME LICENSE.txt COMPONENT HueRuntime)
 
 # CMake resolves the installed MSVC redistributable set. Package Release only;
 # never ship the debug CRT or ASan runtime as part of the review distribution.

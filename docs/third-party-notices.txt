@@ -1,4 +1,4 @@
-Hue engineering review package - dependency and asset notices
+Hue - dependency and asset notices
 
 Each dependency's actual license text is included under licenses/.
 Runtime dependencies (statically linked unless stated):
@@ -22,6 +22,8 @@ and modifications. Hue's procedural arena and shaders are project-authored.
 Sound effects in assets/audio are project-authored procedural synthesis
 (tools/assets/generate_sounds.py); no third-party recordings are included.
 
-No project-wide license has been selected for Hue. Dependency/asset notices do
-not grant a license to other project files. This is a local review artifact,
-not a public release or a change to the owner's licensing choices.
+Hue's own code, shaders, procedural arena and sound effects are released under
+the MIT License (LICENSE.txt). Each dependency and asset above keeps its own
+license. A game built with Hue that ships these dependencies must carry their
+notices too; every one is permissive (MIT, zlib, BSD, Apache-2.0, public domain
+or CC0).

@@ -1,4 +1,5 @@
-HUE - Windows v1 candidate (external acceptance waived by owner)
+HUE v1.0.0 - Windows
+https://github.com/Nav-Prak/hue
 
 Extract the entire archive before running hue.exe. Keep assets/ and shaders/
 beside it. Windows x64, SSE4.2 CPU and a working Vulkan 1.3 graphics driver are
@@ -36,9 +37,11 @@ two attacks, one shadow-casting sun and procedural sound effects. No parry,
 third attack, boss phase, music, pose interpolation or general editor. The
 November additions have automated tests only; nobody has played or listened
 to them. Physical gamepad and clean-machine checks,
-two external playtesters, Linux CI, sustained fuzzing and saved Tracy profiling
+two external playtesters and saved Tracy profiling
 have not been completed and no longer block this local candidate. Local tests,
-sanitizers and runtime input validation remain enabled. Frame pacing on the
+sanitizers and runtime input validation remain enabled. CI builds and tests
+Windows and Linux, and each parser was fuzzed for four hours with no finding.
+Frame pacing on the
 author's PC is not a hardware guarantee.
 If Vulkan initialization fails, the normal executable can keep a blank window
 for diagnostics; use --require-renderer to fail explicitly. See terminal output.
@@ -49,6 +52,5 @@ Do not use developer interfaces or edited shaders as a security sandbox.
 
 manifest.json contains SHA-256 hashes, build revision and dirty-tree status.
 These detect accidental changes; they are not signatures or proof of provenance.
-licenses/ and third-party-notices.txt contain shipped dependency notices.
-The project has no declared project-wide license; this private review package
-does not introduce one. No public release or redistribution approval is implied.
+Hue is released under the MIT License (LICENSE.txt). licenses/ and
+third-party-notices.txt contain the shipped dependency and asset notices.

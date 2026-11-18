@@ -226,7 +226,6 @@ the diagnostic fallback. Start with Enter, attack with LMB/E, dodge with Space,
 lock with Tab, move with WASD, orbit with RMB and restart with R.
 
 The owner separately authorized pushing the completed source commits on
-October 14. No tag, public release, binary upload, application or marketing
-publication is authorized by the acceptance waiver or source push. A
-project-wide license has not been selected; dependency notices do not supply
-one for Hue. No new license or redistribution permission is granted here.
+October 14. On November 17 the owner chose the MIT License for Hue and
+authorized publishing v1.0.0 as a GitHub release with the verified Windows
+package. Dependency and asset notices keep their own licenses.
